@@ -39,9 +39,15 @@ cerebellum pipeline (the earliest one, while statistics are still converging)
 ## Quick start
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install numpy opencv-python-headless
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/make_synthetic.py --seconds 60 --out data/synthetic
 PYTHONPATH=. .venv/bin/python scripts/run_experiment.py data/synthetic
+```
+
+Run the unit tests:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest tests/
 ```
 
 ## Real capture with an iPhone
@@ -56,6 +62,35 @@ PYTHONPATH=. .venv/bin/python scripts/run_experiment.py data/synthetic
    `{"events": [[t0, t1], ...], "fps": 30}` with the timestamps of anything
    that should have been recorded.
 5. Run: `PYTHONPATH=. .venv/bin/python scripts/run_experiment.py data/my_rec`
+
+## First real capture (webcam, desk scene)
+
+One 65 s desk recording with an external webcam (30 fps) + phone gyro stream
+(synced by the shake trick, `imu_offset` 11.342 s), 6 annotated events:
+
+```
+method                recall  precision   stored  clips
+cerebellum            0.33    0.50        0.102    4
+naive_diff            0.00    0.00        0.042    2
+uniform(matched)      0.17    0.17        0.092    6
+uniform(5%)           0.17    0.33        0.046    3
+```
+
+The relative ordering survives on real data (cerebellum > baselines at matched
+budget), but absolute recall drops from 0.83 to 0.33: the two late events are
+caught, the four earlier ones are missed, and one early clip (5.5–8.9 s) is a
+false trigger. A 60 s desk scene is exactly the regime the README's
+limitations predict to be hard — autofocus breathing, exposure adaptation,
+small background motion — all of which read as "surprise" until the negative
+image absorbs them. This recording predates the multi-timescale tuning and
+still uses the hand-set thresholds; treat it as a sanity check (real sensor
+noise does not break the pipeline) rather than a performance measurement.
+
+Reproduce:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_experiment.py data/webcam_rec
+```
 
 ## Adapter experiment: cerebellum as a frozen-backbone add-on
 
