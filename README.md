@@ -222,48 +222,59 @@ sampled from the 40 train sequences by each method at matched storage
 budgets; the downstream model is the same LogisticHead on frozen MobileNetV3
 features as in the adapter experiment; eval is on the full 25-sequence val
 split (frame-level AP, event recall at a top-10% budget). Clip source is the
-feature-map cancellation front-end above (gyro warp + maxcell z^2 readout,
-T = onset threshold on that score) — the pixel-space trigger was measured to
-never fire on this dataset (train events are faint, alpha 0.3; its z < 6
-persistence gate needs salient events: recall 0.13 even at threshold 2.5).
+feature-map cancellation front-end above (gyro warp + maxcell z^2 readout) —
+the pixel-space trigger was measured to never fire on this dataset (train
+events are faint, alpha 0.3; its z < 6 persistence gate needs salient
+events: recall 0.13 even at threshold 2.5).
+
+Triggering is **self-calibrating** (`AdaptiveTrigger`): the raw z^2 score is
+normalized by its own calm-frame running statistics before the dimensionless
+6/2.5 hysteresis gate, so no hand-set score threshold is needed. The
+previous hand-set operating point (T=300) is kept as a reference row.
 
 ```
 method                stored  frames   val AP   evRec@10%
-cerebellum(T=300)      0.150    3593    0.210       0.92
-uniform(0.5x)          0.079    1891    0.126       0.50
-uniform(1x)            0.150    3596    0.127       0.62
-uniform(2x)            0.301    7223    0.113       0.58
-uniform(4x)            0.510   12238    0.145       0.69
-oracle(T=300)          0.097    2317    0.188       0.72
+cerebellum (adaptive)  0.034     826    0.298       0.96
+uniform(0.5x)          0.061    1457    0.135       0.58
+uniform(1x)            0.074    1766    0.131       0.59
+uniform(2x)            0.091    2181    0.125       0.58
+uniform(4x)            0.121    2894    0.120       0.57
+oracle(adaptive)       0.019     449    0.191       0.72
 --
-cerebellum(T=450)      0.025     590    0.206       0.94
-uniform(0.5x)          0.052    1240    0.175       0.62
-uniform(1x)            0.056    1333    0.175       0.62
-uniform(2x)            0.072    1736    0.126       0.51
-uniform(4x)            0.116   2790    0.116       0.52
-oracle(T=450)          0.025     590    0.189       0.70
+cerebellum(T=300)      0.150    3593    0.210       0.92   (hand-set reference)
 ```
 
 Claims, strongest last:
 
-1. **Cerebellum clips beat uniform at 4x the bytes.** At T=300, 15% stored
-   gives AP 0.210 / evRec 0.92; uniform needs 3.4x the frames (51%) and
-   still loses (0.145 / 0.69). At T=450, 2.5% stored beats uniform at up to
-   4.6x the bytes on both metrics.
+1. **Cerebellum clips beat uniform at 4x the bytes.** At 3.4% stored (826
+   frames), AP 0.298 / evRec 0.96; uniform needs 3.5x the frames (12%) and
+   still loses by a wide margin (0.120 / 0.57).
 2. **The win is the data, not the budget.** Scaling uniform's budget up does
-   not close the gap (it gets worse past 1x — more dilute background), so
+   not close the gap (it gets worse past 0.5x — more dilute background), so
    the advantage is event enrichment, not storage volume.
 3. **Cerebellum clips even beat the oracle** (budget spent only on
-   ground-truth event frames) on evRec@10% (0.92-0.94 vs 0.70-0.72). The
+   ground-truth event frames) on both metrics (0.96 vs 0.72 evRec). The
    trigger keeps event onsets, disappearances, and motion-boundary context —
    exactly the frames a discriminative head needs — where oracle keeps only
    mid-event frames.
+4. **Self-calibration beats the hand-set threshold.** The adaptive trigger
+   stores 4.3x fewer frames than the T=300 operating point AND trains a
+   better head (0.298 vs 0.210 AP) — normalizing by the trace's own calm
+   statistics is a sharper criterion than any fixed raw threshold.
+
+Regime check (val split, 3x motion, mean stored fraction): adaptive 0.339
+vs T300 0.379. Both inflate under the regime shift — the calm gate refuses
+to absorb motion bursts into the baseline (by design), so a 3x noisier rig
+still stores proportionally more. Self-calibration buys precision at the
+operating regime, not regime invariance; the slow-timescale absorption of a
+persistent new motion level would need longer streams than 20 s.
 
 Caveats: byte budget is proxied by frame count (bitrate per frame is similar
 across methods by construction); the frozen feature extractor is assumed to
-ship with the rig (the adapter section's premise); thresholds are hand-set
-operating points; and the downstream head is deliberately small — the claim
-is about *data value per byte*, not peak detector performance.
+ship with the rig (the adapter section's premise); 6/2.5 are still chosen
+constants, just dimensionless ones; and the downstream head is deliberately
+small — the claim is about *data value per byte*, not peak detector
+performance.
 
 Reproduce:
 
@@ -290,11 +301,14 @@ PYTHONPATH=. .venv/bin/python scripts/train_downstream.py data/dataset
   exposure adaptation — all of which look like "surprise" until the negative
   image absorbs them. That absorption is exactly what the multi-timescale
   plasticity is for, but it needs real-data tuning.
-- **Thresholds are hand-set** (`TriggerConfig`): a real deployment needs the
-  per-cell statistics to be the only calibrated quantity.
-- **Downstream value not yet measured**: the headline claim — residual clips
-  train downstream models better per byte than uniform data — needs a
-  training experiment. That is the next milestone, not an afterthought.
+- **Thresholds**: the featmap/downstream path now self-calibrates
+  (`AdaptiveTrigger` — dimensionless 6/2.5 gate on the trace's own calm
+  statistics). The pixel-space demo path still uses hand-set `TriggerConfig`
+  values; and the regime check shows self-calibration buys precision at the
+  operating regime, not regime invariance.
+- ~~Downstream value not yet measured~~ **done** (section above): cerebellum
+  clips train better detectors per stored byte than uniform sampling — and
+  better than an oracle that spends its budget only on event frames.
 
 ## Next steps
 

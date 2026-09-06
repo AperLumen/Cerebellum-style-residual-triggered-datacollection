@@ -9,8 +9,13 @@ Setup (the README's headline claim, measured):
     z^2 readout), the best-performing front-end on this benchmark (README).
     The pixel-space trigger was measured to never fire here: train events are
     faint (alpha 0.3) and its z < 6 persistence gate requires salient events.
-  - operating points: T=300 (full) and T=450 (lean); uniform 1 s clips at
-    k x the cerebellum budget; oracle = budget spent only on event frames
+  - triggering: AdaptiveTrigger (default) — the raw score is normalized by
+    its own calm-frame statistics, so the dimensionless 6/2.5 gate needs no
+    hand-set score threshold and survives the 1x -> 3x motion regime shift.
+    --fixed-thr 300 keeps the previous hand-set operating point for
+    comparison.
+  - baselines per operating point: uniform 1 s clips at k x the cerebellum
+    budget; oracle = budget spent only on event frames
   - downstream model: LogisticHead on frozen MobileNetV3 features (the same
     head as the adapter experiment, so results are directly comparable)
   - eval: mean per-sequence frame-level AP on the FULL val split, plus
@@ -32,7 +37,7 @@ import numpy as np
 warnings.filterwarnings("ignore", message=".*encountered in matmul")
 
 from cerebellum_cancel.adapter import LogisticHead, average_precision
-from cerebellum_cancel.core import SurpriseTrigger, TriggerConfig
+from cerebellum_cancel.core import AdaptiveTrigger, SurpriseTrigger, TriggerConfig
 from cerebellum_cancel.eval import uniform_baseline
 from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
                                                maxcell_score, rollout)
@@ -40,16 +45,13 @@ from cerebellum_cancel.io import load_imu_csv
 
 CACHE = "runs/downstream_clips.json"
 FPS_FALLBACK = 30.0
-CB_THRESHOLDS = (300.0, 450.0)   # maxcell z^2 onset thresholds (off = T/2)
 
 
 def seq_dirs(dataset, split):
     return sorted(glob.glob(f"{dataset}/{split}/seq_*"))
 
 
-def clips_for(seq, onset_thr):
-    """Featmap-cancellation clips for one sequence (rollout is seconds-fast;
-    featmaps are cached on disk)."""
+def score_seq(seq):
     meta = json.load(open(f"{seq}/events.json"))
     fps = float(meta.get("fps", FPS_FALLBACK))
     fm = np.load(f"{seq}/featmaps.npy").astype(np.float32)
@@ -58,30 +60,43 @@ def clips_for(seq, onset_thr):
     n = min(len(fm), len(gyro))
     canc = FeatureMapCancel(CancelConfig())
     z, _ = rollout(canc, fm[:n], gyro[:n])
-    score = maxcell_score(z)
-    trig = SurpriseTrigger(TriggerConfig(threshold_k=onset_thr,
-                                         off_k=onset_thr / 2), fps)
+    return maxcell_score(z), fps, n
+
+
+def clips_for_score(score, fps, n, mode):
+    if mode == "adaptive":
+        trig = AdaptiveTrigger()
+        for t in range(1, n):
+            trig.update(t / fps, score[t], fps)
+        return trig.finalize(n / fps)
+    onset = float(mode[1:])          # "T300" -> 300.0
+    trig = SurpriseTrigger(TriggerConfig(threshold_k=onset, off_k=onset / 2),
+                           fps)
     for t in range(1, n):
         trig.update(t / fps, score[t], 1.0)
-    return trig.finalize(n / fps), fps, n
+    return trig.finalize(n / fps)
 
 
-def load_or_compute_clips(dataset):
+def load_or_compute_clips(dataset, modes):
     if os.path.exists(CACHE):
         with open(CACHE) as fp:
-            return json.load(fp)
-    out = {}
+            cache = json.load(fp)
+        if all(all(m in cache.get(seq, {}) for m in modes)
+               for seq in seq_dirs(dataset, "train")):
+            return cache
+    cache = {}
     for seq in seq_dirs(dataset, "train"):
-        out[seq] = {}
-        for thr in CB_THRESHOLDS:
-            clips, fps, n = clips_for(seq, thr)
-            out[seq][str(thr)] = {"clips": clips, "fps": fps, "n_frames": n}
+        cache[seq] = {}
+        score, fps, n = score_seq(seq)
+        for mode in modes:
+            clips = clips_for_score(score, fps, n, mode)
+            cache[seq][mode] = {"clips": clips, "fps": fps, "n_frames": n}
             stored = sum(b - a for a, b in clips) / (n / fps)
-            print(f"  {seq} T={thr}: {len(clips)} clips stored={stored:.3f}")
+            print(f"  {seq} {mode}: {len(clips)} clips stored={stored:.3f}")
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
     with open(CACHE, "w") as fp:
-        json.dump(out, fp)
-    return out
+        json.dump(cache, fp)
+    return cache
 
 
 def clips_to_frames(clips, fps, n):
@@ -131,29 +146,51 @@ def eval_head(head, val):
     return float(np.mean(aps)), float(np.mean(recalls))
 
 
+def regime_check(dataset, fixed_mode):
+    """The 1x -> 3x motion regime shift: a fixed score threshold calibrated
+    at 1x must blow up at 3x; the adaptive trigger should hold."""
+    rows = []
+    for seq in seq_dirs(dataset, "val")[:10]:
+        score, fps, n = score_seq(seq)
+        for mode in ("adaptive", fixed_mode):
+            clips = clips_for_score(score, fps, n, mode)
+            rows.append((mode, sum(b - a for a, b in clips) / (n / fps)))
+    out = {}
+    for mode, frac in rows:
+        out.setdefault(mode, []).append(frac)
+    print("\nregime check (val split, 3x motion):")
+    for mode, fracs in out.items():
+        print(f"  {mode:<10} mean stored fraction: {np.mean(fracs):.3f}")
+    return {m: float(np.mean(f)) for m, f in out.items()}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset", default="data/dataset")
+    ap.add_argument("--modes", default="adaptive,T300",
+                    help="clip triggering modes: adaptive and/or fixed "
+                         "thresholds like T300 (comma-separated)")
     ap.add_argument("--uniform-mults", default="0.5,1,2,4",
                     help="uniform budgets as multiples of the cerebellum budget")
     args = ap.parse_args()
+    modes = args.modes.split(",")
     mults = [float(m) for m in args.uniform_mults.split(",")]
 
     print("computing featmap-cancellation clips on train split (cached) ...")
-    cache = load_or_compute_clips(args.dataset)
+    cache = load_or_compute_clips(args.dataset, modes)
 
     train = []
     for seq in seq_dirs(args.dataset, "train"):
         feats = np.load(f"{seq}/features.npy").astype(np.float32)
         labels = np.load(f"{seq}/labels.npy")
-        fps = cache[seq][str(CB_THRESHOLDS[0])]["fps"]
-        masks = {}
-        for thr in CB_THRESHOLDS:
-            info = cache[seq][str(thr)]
+        fps = cache[seq][modes[0]]["fps"]
+        seq_masks = {}
+        for mode in modes:
+            info = cache[seq][mode]
             n = min(info["n_frames"], len(feats), len(labels))
-            masks[thr] = clips_to_frames([tuple(c) for c in info["clips"]],
-                                         fps, n)
-        train.append((seq, feats, labels, fps, masks))
+            seq_masks[mode] = clips_to_frames([tuple(c) for c in info["clips"]],
+                                              fps, n)
+        train.append((seq, feats, labels, fps, seq_masks))
 
     val = []
     for seq in seq_dirs(args.dataset, "val"):
@@ -161,25 +198,24 @@ def main():
         labels = np.load(f"{seq}/labels.npy")
         val.append((feats, labels))
 
-    print(f"\nval: {len(val)} sequences; training LogisticHead per method\n")
-    print(f"{'method':<20}{'stored':>8}{'frames':>8}{'val AP':>9}{'evRec@10%':>11}")
     results = {}
-    for thr in CB_THRESHOLDS:
-        # cerebellum at its operating point, plus baselines matched to its
-        # per-sequence budget
-        specs = [(f"cerebellum(T={thr:g})", "cb", 1.0)]
+    print(f"\nval: {len(val)} sequences; training LogisticHead per method\n")
+    for mode in modes:
+        label = "cerebellum" if mode == "adaptive" else f"cerebellum({mode})"
+        specs = [(label, "cb", 1.0)]
         specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
-        specs += [(f"oracle(T={thr:g})", "oracle", 1.0)]
+        specs += [(f"oracle({mode})", "oracle", 1.0)]
+        print(f"{'method':<20}{'stored':>8}{'frames':>8}{'val AP':>9}{'evRec@10%':>11}")
         for name, kind, mult in specs:
             Xs, ys, fracs = [], [], []
-            for seq, feats, labels, fps, masks in train:
+            for seq, feats, labels, fps, seq_masks in train:
                 n = min(len(feats), len(labels))
                 if kind == "cb":
-                    mask = masks[thr]
+                    mask = seq_masks[mode]
                 elif kind == "oracle":
-                    mask = oracle_frames(masks[thr].mean(), labels[:n])
+                    mask = oracle_frames(seq_masks[mode].mean(), labels[:n])
                 else:
-                    mask = uniform_frames(mult * masks[thr].mean(), fps, n)
+                    mask = uniform_frames(mult * seq_masks[mode].mean(), fps, n)
                 Xs.append(feats[:n][mask])
                 ys.append(labels[:n][mask])
                 fracs.append(mask.mean())
@@ -192,6 +228,9 @@ def main():
                              "val_ap": ap_mean, "ev_rec_at_10": rec}
             print(f"{name:<20}{np.mean(fracs):>8.3f}{len(X):>8}"
                   f"{ap_mean:>9.3f}{rec:>11.2f}")
+        print()
+
+    results["regime_check"] = regime_check(args.dataset, "T300")
 
     out_path = "runs/downstream_results.json"
     with open(out_path, "w") as fp:

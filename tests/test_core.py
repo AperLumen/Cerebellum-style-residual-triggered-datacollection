@@ -121,3 +121,48 @@ def test_trigger_finalize_opens_clip_at_end():
         tr.update(i / 30, 8.0, 1.0)
     clips = tr.finalize(10.0)
     assert clips == [(4 / 30, 10.0)]  # onset lands on the 5th frame
+
+
+def _run_adaptive(base, noise_sd, spike, n_calm=300, n_spike=10):
+    from cerebellum_cancel.core import AdaptiveTrigger
+    rng = np.random.default_rng(0)
+    tr = AdaptiveTrigger()
+    scores = np.concatenate([rng.normal(base, noise_sd, n_calm),
+                             np.full(n_spike, spike),
+                             rng.normal(base, noise_sd, 100)])
+    on = False
+    for i, s in enumerate(scores):
+        on = tr.update(i / 30, float(s), 30.0)
+    tr.finalize(len(scores) / 30)
+    return tr
+
+
+def test_adaptive_trigger_fires_without_set_threshold():
+    """A spike ~8 calm-sd above baseline must onset with NO hand-set score
+    threshold — the same dimensionless 6/2.5 gate the pixel pipeline uses."""
+    tr = _run_adaptive(base=100.0, noise_sd=10.0, spike=180.0)
+    assert len(tr.clips) == 1
+    a, b = tr.clips[0]
+    assert 300 / 30 - 1 <= a <= 310 / 30 + 1   # clip covers the spike
+    assert b > a
+
+
+def test_adaptive_trigger_is_scale_invariant():
+    """The same RELATIVE spike at a 10x different score scale must behave
+    the same — the property a fixed raw threshold (T=300) does not have."""
+    tr = _run_adaptive(base=1000.0, noise_sd=100.0, spike=1800.0)
+    assert len(tr.clips) == 1
+
+
+def test_adaptive_stats_not_polluted_by_event():
+    """Event frames must not move the calm baseline (equilibrium gate)."""
+    from cerebellum_cancel.core import AdaptiveTrigger
+    rng = np.random.default_rng(1)
+    tr = AdaptiveTrigger(warmup_frames=30)
+    calm = rng.normal(50.0, 5.0, 400)
+    scores = np.concatenate([calm[:200], np.full(10, 500.0), calm[200:]])
+    for i, s in enumerate(scores):
+        tr.update(i / 30, float(s), 30.0)
+    tr.finalize(len(scores) / 30)
+    assert abs(tr.mu - 50.0) < 5.0 * 0.5
+    assert len(tr.clips) == 1

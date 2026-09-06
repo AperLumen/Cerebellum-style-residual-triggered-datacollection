@@ -44,6 +44,64 @@ class TriggerConfig:
 
 
 @dataclass
+class AdaptiveTrigger:
+    """Self-calibrating trigger: normalizes the raw surprise score by its own
+    calm-frame running statistics before applying the (dimensionless)
+    hysteresis thresholds, so the thresholds stay valid across datasets and
+    motion regimes — the only calibrated quantities are the running stats
+    upstream, not a hand-set score threshold.
+
+    The score gate mirrors the per-cell equilibrium constraint: statistics
+    update only on frames that are outside a clip AND below the onset
+    threshold (a frame that looks like an event must not move the baseline).
+    During warmup the trigger is suppressed and stats bootstrap
+    unconditionally (the first frames of a recording are background by
+    construction, same assumption as the featmap warmup); mu seeds from the
+    first observed score so the bootstrap is scale-free.
+    """
+
+    cfg: TriggerConfig = field(default_factory=TriggerConfig)
+    stat_ema: float = 0.02          # running mean/var rate of the score
+    warmup_frames: int = 30         # trigger suppressed, unconditional stats
+    mu: float = 0.0                 # seeded from the first observed score
+    var: float = 1.0
+    n: int = 0
+
+    def __post_init__(self):
+        self._inner_state = None    # SurpriseTrigger, created in update()
+
+    def _stat_update(self, score: float):
+        d = score - self.mu
+        self.mu += self.stat_ema * d
+        self.var += self.stat_ema * (d * d - self.var)
+
+    def update(self, t: float, score: float, fps: float) -> bool:
+        """Feed one frame's raw score (e.g. maxcell z^2); returns True while
+        inside a triggered clip."""
+        if self._inner_state is None:
+            self._inner_state = SurpriseTrigger(self.cfg, fps)
+        self.n += 1
+        if self.n == 1:
+            self.mu = float(score)
+        sd = float(np.sqrt(self.var)) + 1e-3 * (abs(self.mu) + 1.0)
+        z = (score - self.mu) / sd
+        if self.n <= self.warmup_frames:
+            self._stat_update(score)
+            return False
+        on = self._inner_state.update(t, z, 1.0)
+        if not on and z < self.cfg.threshold_k:
+            self._stat_update(score)
+        return on
+
+    @property
+    def clips(self):
+        return self._inner_state.clips if self._inner_state else []
+
+    def finalize(self, t_end: float):
+        return self._inner_state.finalize(t_end)
+
+
+@dataclass
 class CerebellumCancel:
     grid: tuple[int, int] = (8, 6)          # (cols, rows) of residual cells
     fast_lr: float = 0.05                   # fast plasticity lr
