@@ -147,6 +147,59 @@ class LogisticHead:
         return self
 
 
+class MLPHead:
+    """One-hidden-layer event head (dim -> hidden -> 1), torch Adam.
+
+    Same scores/fit interface as LogisticHead so the downstream comparison
+    can swap heads without touching evaluation code. Deterministic given
+    seed; keeps numpy I/O so it drops into existing pipelines.
+    """
+
+    def __init__(self, dim: int, hidden: int = 128, seed: int = 1,
+                 l2: float = 1e-4):
+        import torch
+        self._torch = torch
+        g = torch.Generator().manual_seed(seed)
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(dim, hidden), torch.nn.ReLU(),
+            torch.nn.Linear(hidden, 1))
+        with torch.no_grad():
+            for layer in (self.net[0], self.net[2]):
+                layer.weight.copy_(0.01 * torch.randn(
+                    layer.weight.shape, generator=g))
+                layer.bias.zero_()
+        self.opt = torch.optim.Adam(self.net.parameters(), lr=1e-3)
+        self.l2 = l2
+
+    def scores(self, X):
+        t = self._torch
+        with t.no_grad():
+            x = t.from_numpy(np.asarray(X, dtype=np.float32))
+            return self.net(x).squeeze(-1).numpy()
+
+    def fit(self, X, y, iters=400, lr=None, **_ignored):
+        t = self._torch
+        if lr is not None:
+            for pg in self.opt.param_groups:
+                pg["lr"] = lr
+        x = t.from_numpy(np.asarray(X, dtype=np.float32))
+        target = t.from_numpy(np.asarray(y, dtype=np.float32))
+        pos = float(target.mean()) if len(target) else 0.5
+        self.net.train()
+        for _ in range(iters):
+            self.opt.zero_grad()
+            logit = self.net(x).squeeze(-1)
+            # logistic loss with class-balance weights (event frames are ~15%)
+            loss = t.nn.functional.binary_cross_entropy_with_logits(
+                logit, target, pos_weight=t.tensor(
+                    (1 - pos) / max(pos, 1e-6)))
+            l2_reg = sum((p ** 2).sum() for p in self.net.parameters())
+            (loss + self.l2 * l2_reg).backward()
+            self.opt.step()
+        self.net.eval()
+        return self
+
+
 def average_precision(y_true: np.ndarray, scores: np.ndarray) -> float:
     order = np.argsort(-scores)
     y = y_true[order]

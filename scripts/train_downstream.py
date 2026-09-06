@@ -16,8 +16,9 @@ Setup (the README's headline claim, measured):
     comparison.
   - baselines per operating point: uniform 1 s clips at k x the cerebellum
     budget; oracle = budget spent only on event frames
-  - downstream model: LogisticHead on frozen MobileNetV3 features (the same
-    head as the adapter experiment, so results are directly comparable)
+  - downstream model: LogisticHead (default) or MLPHead on frozen
+    MobileNetV3 features — same scores/fit interface, --heads picks which;
+    the MLP is a measured *negative* for val AP here (README below)
   - eval: mean per-sequence frame-level AP on the FULL val split, plus
     event recall at a top-10% frame budget
 
@@ -36,7 +37,8 @@ import numpy as np
 
 warnings.filterwarnings("ignore", message=".*encountered in matmul")
 
-from cerebellum_cancel.adapter import LogisticHead, average_precision
+from cerebellum_cancel.adapter import (LogisticHead, MLPHead,
+                                       average_precision)
 from cerebellum_cancel.core import AdaptiveTrigger, SurpriseTrigger, TriggerConfig
 from cerebellum_cancel.eval import uniform_baseline
 from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
@@ -130,9 +132,9 @@ def oracle_frames(budget_frac, labels):
     return keep
 
 
-def eval_head(head, val):
+def eval_head(head, val_feats, val_labels):
     aps, recalls = [], []
-    for feats, labels in val:
+    for feats, labels in zip(val_feats, val_labels):
         scores = np.abs(head.scores(feats))
         aps.append(average_precision(labels, scores))
         k = max(int(0.1 * len(labels)), 1)
@@ -170,10 +172,13 @@ def main():
     ap.add_argument("--modes", default="adaptive,T300",
                     help="clip triggering modes: adaptive and/or fixed "
                          "thresholds like T300 (comma-separated)")
+    ap.add_argument("--heads", default="logistic,mlp",
+                    help="downstream heads to train (comma-separated)")
     ap.add_argument("--uniform-mults", default="0.5,1,2,4",
                     help="uniform budgets as multiples of the cerebellum budget")
     args = ap.parse_args()
     modes = args.modes.split(",")
+    heads = args.heads.split(",")
     mults = [float(m) for m in args.uniform_mults.split(",")]
 
     print("computing featmap-cancellation clips on train split (cached) ...")
@@ -199,36 +204,45 @@ def main():
         val.append((feats, labels))
 
     results = {}
-    print(f"\nval: {len(val)} sequences; training LogisticHead per method\n")
-    for mode in modes:
-        label = "cerebellum" if mode == "adaptive" else f"cerebellum({mode})"
-        specs = [(label, "cb", 1.0)]
-        specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
-        specs += [(f"oracle({mode})", "oracle", 1.0)]
-        print(f"{'method':<20}{'stored':>8}{'frames':>8}{'val AP':>9}{'evRec@10%':>11}")
-        for name, kind, mult in specs:
-            Xs, ys, fracs = [], [], []
-            for seq, feats, labels, fps, seq_masks in train:
-                n = min(len(feats), len(labels))
-                if kind == "cb":
-                    mask = seq_masks[mode]
-                elif kind == "oracle":
-                    mask = oracle_frames(seq_masks[mode].mean(), labels[:n])
-                else:
-                    mask = uniform_frames(mult * seq_masks[mode].mean(), fps, n)
-                Xs.append(feats[:n][mask])
-                ys.append(labels[:n][mask])
-                fracs.append(mask.mean())
-            X = np.vstack(Xs)
-            y = np.concatenate(ys)
-            head = LogisticHead(X.shape[1]).fit(X, y)
-            ap_mean, rec = eval_head(head, val)
-            results[name] = {"stored_frac": float(np.mean(fracs)),
-                             "n_frames": int(len(X)),
-                             "val_ap": ap_mean, "ev_rec_at_10": rec}
-            print(f"{name:<20}{np.mean(fracs):>8.3f}{len(X):>8}"
-                  f"{ap_mean:>9.3f}{rec:>11.2f}")
-        print()
+    head_classes = {"logistic": LogisticHead, "mlp": MLPHead}
+    val_feats = [v[0] for v in val]
+    val_labels = [v[1] for v in val]
+    print(f"\nval: {len(val)} sequences; training heads: {', '.join(heads)}\n")
+    for head_name in heads:
+        Head = head_classes[head_name]
+        print(f"== head: {head_name} ==")
+        for mode in modes:
+            label = ("cerebellum" if mode == "adaptive"
+                     else f"cerebellum({mode})")
+            specs = [(label, "cb", 1.0)]
+            specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
+            specs += [(f"oracle({mode})", "oracle", 1.0)]
+            print(f"{'method':<20}{'stored':>8}{'frames':>8}{'val AP':>9}{'evRec@10%':>11}")
+            for name, kind, mult in specs:
+                Xs, ys, fracs = [], [], []
+                for seq, feats, labels, fps, seq_masks in train:
+                    n = min(len(feats), len(labels))
+                    if kind == "cb":
+                        mask = seq_masks[mode]
+                    elif kind == "oracle":
+                        mask = oracle_frames(seq_masks[mode].mean(), labels[:n])
+                    else:
+                        mask = uniform_frames(mult * seq_masks[mode].mean(),
+                                              fps, n)
+                    Xs.append(feats[:n][mask])
+                    ys.append(labels[:n][mask])
+                    fracs.append(mask.mean())
+                X = np.vstack(Xs)
+                y = np.concatenate(ys)
+                head = Head(X.shape[1]).fit(X, y)
+                ap_mean, rec = eval_head(head, val_feats, val_labels)
+                key = f"{head_name}/{name}"
+                results[key] = {"stored_frac": float(np.mean(fracs)),
+                                "n_frames": int(len(X)),
+                                "val_ap": ap_mean, "ev_rec_at_10": rec}
+                print(f"{name:<20}{np.mean(fracs):>8.3f}{len(X):>8}"
+                      f"{ap_mean:>9.3f}{rec:>11.2f}")
+            print()
 
     results["regime_check"] = regime_check(args.dataset, "T300")
 

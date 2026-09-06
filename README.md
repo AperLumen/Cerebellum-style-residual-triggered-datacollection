@@ -269,12 +269,25 @@ still stores proportionally more. Self-calibration buys precision at the
 operating regime, not regime invariance; the slow-timescale absorption of a
 persistent new motion level would need longer streams than 20 s.
 
+Head robustness (same clips, stronger downstream model): swapping the
+LogisticHead for a 128-hidden MLP does **not** raise val AP — it lowers it
+(cerebellum adaptive: 0.298 -> 0.200; a 5-config regularization sweep —
+hidden/l2/dropout/iters — tops out at 0.247). The val regime (3x motion +
+unseen bar shape) punishes capacity: the MLP overfits motion-specific
+correlations in the training clips, the same failure the adapter section
+documented for appearance-based heads ("surprise representations transfer;
+appearance representations do not"). What the MLP does improve is the top of
+the ranking (evRec@10% 0.96 -> 0.99-1.00 on cerebellum clips). The
+data-value claim is unchanged across every head and config: cerebellum
+clips beat uniform at all matched budgets, and beat the oracle on event
+recall. On this benchmark, AP is data-limited, not model-limited.
+
 Caveats: byte budget is proxied by frame count (bitrate per frame is similar
 across methods by construction); the frozen feature extractor is assumed to
 ship with the rig (the adapter section's premise); 6/2.5 are still chosen
 constants, just dimensionless ones; and the downstream head is deliberately
 small — the claim is about *data value per byte*, not peak detector
-performance.
+performance (a stronger MLP head is measured below: it does not raise AP).
 
 Reproduce:
 
