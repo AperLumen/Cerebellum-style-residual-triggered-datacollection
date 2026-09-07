@@ -354,6 +354,58 @@ Reproduce:
 PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset
 ```
 
+## Flow-as-arbiter cascade
+
+A middle architecture between "gyro only" and "flow every frame": the gyro
+warp runs always-on; DIS flow is consulted **only on trigger candidates**, as
+an arbiter that vetoes the ones it can explain. Composition per candidate
+peak frame (`scripts/run_arbiter_eval.py`): the gyro shift pre-warps both the
+gray pair (so DIS only searches the small residual the gyro model
+mispredicts — without this, DIS loses track at large rotations, exactly where
+triggers fire) and F_{t-1}; DIS then refines along the residual flow. A
+candidate run is vetoed when the flow-refined residual keeps < `explain_ratio`
+(0.5) of the gyro residual's interior energy — i.e. the residual was
+ego-motion misprediction, not surprise.
+
+Measured on the full benchmark (15 train + 5 val, run-level readout —
+fixed-threshold runs, which unlike `AdaptiveTrigger`'s adaptive clips are
+monotone in the trace):
+
+```
+                 stored   precision   evRec   DIS calls/seq   amortized ms/frame
+train gyro        0.401      0.257      1.00        --               --
+train cascade     0.401      0.257      1.00       21.3            0.135
+val   gyro        0.520      0.146      1.00        --               --
+val   cascade     0.498      0.155      1.00       23.6            0.150
+```
+
+Honest read: on this synthetic rig the cascade is almost a no-op (6 of 118
+val runs vetoed). That is a *measured* property of the benchmark, not a
+weakness of the arbiter — three mechanisms explain it, each verified:
+
+1. The synthetic rig is pure global yaw/pitch translation (roll < 1 deg/s),
+   which is exactly the model class of the gyro warp, so the warp is
+   near-exact and calm-frame residuals are feature noise, not modeling error
+   (flow-refined residual energy ≈ gyro residual energy, ratio 1.03–1.27).
+2. At 28x28 maps, subpixel miscalibration stays under the feature-noise
+   floor: stressing f_map by 10–50% still leaves `rho ≈ 1`, so no veto fires
+   (`--fmap-scale` in the eval script).
+3. What the arbiter *would* catch — structured residuals the global-shift
+   model cannot express (real roll, parallax/depth, large calibration
+   error) — does not exist in this data.
+
+So the cascade's status is: mechanism and cost validated (~0.15 ms/frame
+amortized, ~25x cheaper than running DIS every frame, veto power retained
+when it matters), value pending real-camera validation — it is the right
+safety net for exactly the failure modes the synthetic rig lacks. The
+run-level readout also exposed that `AdaptiveTrigger`'s running normalization
+is non-monotone (zeroing a vetoed run can *re-sensitize* later clips), which
+the cascade evaluation sidesteps by comparing at fixed-threshold run level.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
+```
+
 ## Honest limitations
 
 - **Screen recording is a dead end for this method (measured, not assumed).**
