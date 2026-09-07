@@ -7,7 +7,8 @@ import numpy as np
 
 from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
                                                energy_score, expected_shift,
-                                               maxcell_score, shift_map)
+                                               maxcell_score, rollout,
+                                               shift_map)
 
 
 def test_shift_map_zero_is_identity():
@@ -25,6 +26,39 @@ def test_expected_shift_math():
     dx, dy = expected_shift(np.array([0.0, 30.0, 0.0]), cfg)
     assert np.isclose(dx, 24.25 * np.tan(np.radians(30.0) / 30.0))
     assert dy == 0.0
+
+
+def test_expected_shift_translation_term():
+    """Constant-depth translation adds f_map * (1/Z) * v * dt to the shift,
+    and trans_scale=0 (or trans=None) leaves the rotation-only result."""
+    cfg = CancelConfig(fps=30.0, f_map=24.25, trans_scale=0.5)
+    gyro = np.zeros(3)
+    trans = np.array([0.6, -0.3, 0.0])
+    dx, dy = expected_shift(gyro, cfg, trans)
+    assert np.isclose(dx, 0.5 * 24.25 * 0.6 / 30.0)
+    assert np.isclose(dy, 0.5 * 24.25 * -0.3 / 30.0)
+    cfg0 = CancelConfig(fps=30.0, f_map=24.25)
+    assert expected_shift(gyro, cfg0, trans) == (0.0, 0.0)
+    assert expected_shift(gyro, cfg, None) == (0.0, 0.0)
+
+
+def test_rollout_passes_translation_per_frame():
+    """rollout threads the per-frame translation velocity through to step.
+    Uses blurred content: on white noise a shifted copy is unpredictable
+    (same caveat as the round-trip test), so the jerk would not stand out."""
+    import cv2
+    rng = np.random.default_rng(7)
+    cfg = CancelConfig(fps=30.0, f_map=24.25, trans_scale=1.0, robust=True)
+    base = cv2.GaussianBlur(
+        rng.normal(size=(2, 16, 16)).astype(np.float32), (0, 0), 2.0)
+    fmaps = np.stack([base + rng.normal(0, 0.02, base.shape).astype(np.float32)
+                      for _ in range(4)])
+    gyros = np.zeros((4, 3), dtype=np.float32)
+    trans = np.zeros((4, 3), dtype=np.float32)
+    trans[2] = [100.0, 0.0, 0.0]                # violent jerk at t=2 only
+    canc = FeatureMapCancel(cfg)
+    z, sur = rollout(canc, fmaps, gyros, trans)
+    assert sur[2] > sur[1] and sur[2] > sur[3]
 
 
 def test_warp_roundtrip_error_small():

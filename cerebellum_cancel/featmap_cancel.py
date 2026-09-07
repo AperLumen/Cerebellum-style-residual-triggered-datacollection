@@ -37,6 +37,12 @@ class CancelConfig:
                              #  winsorizing the stat update at `winsor` sigma
                              #  makes outliers unable to inflate or freeze it)
     winsor: float = 3.0      # clip (in sd units) applied to the stat update
+    trans_scale: float = 0.0 # effective 1/Z (1/m) for the translation term;
+                             # 0 disables it. With a camera-frame translation
+                             # velocity v (m/s), the content shift is
+                             # f_map * trans_scale * v * dt, same sign
+                             # convention as the rotation term (prep folds
+                             # per-axis signs into v).
 
 
 def shift_map(F: np.ndarray, dx: float, dy: float) -> np.ndarray:
@@ -50,10 +56,15 @@ def shift_map(F: np.ndarray, dx: float, dy: float) -> np.ndarray:
     return axis_shift(axis_shift(F, dx, -1), dy, -2)
 
 
-def expected_shift(gyro: np.ndarray, cfg: CancelConfig) -> tuple[float, float]:
-    """Frame-to-frame content shift (map px) implied by the gyro rate."""
+def expected_shift(gyro: np.ndarray, cfg: CancelConfig,
+                   trans: np.ndarray | None = None) -> tuple[float, float]:
+    """Frame-to-frame content shift (map px): rotation term plus an optional
+    constant-depth translation term."""
     dx = cfg.f_map * np.tan(np.radians(gyro[1]) / cfg.fps)   # yaw   -> x
     dy = cfg.f_map * np.tan(np.radians(gyro[0]) / cfg.fps)   # pitch -> y
+    if trans is not None and cfg.trans_scale > 0:
+        dx += cfg.trans_scale * cfg.f_map * trans[0] / cfg.fps
+        dy += cfg.trans_scale * cfg.f_map * trans[1] / cfg.fps
     return dx, dy
 
 
@@ -68,12 +79,13 @@ class FeatureMapCancel:
         self.var: np.ndarray | None = None
         self.n = 0
 
-    def step(self, F: np.ndarray, gyro: np.ndarray) -> dict:
+    def step(self, F: np.ndarray, gyro: np.ndarray,
+             trans: np.ndarray | None = None) -> dict:
         F = F.astype(np.float32)
         if self.F_prev is None:
             pred = F
         elif self.cfg.use_warp:
-            dx, dy = expected_shift(gyro, self.cfg)
+            dx, dy = expected_shift(gyro, self.cfg, trans)
             # sign verified empirically on the synthetic rig: the content
             # shift that best predicts F_t is the negated physical shift
             pred = shift_map(self.F_prev, -dx, -dy)
@@ -116,13 +128,16 @@ class FeatureMapCancel:
 
 
 def rollout(canc: FeatureMapCancel, fmaps: np.ndarray,
-            gyros: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Returns (z-maps (T,C,H,W), surprises (T,))."""
+            gyros: np.ndarray,
+            trans: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Returns (z-maps (T,C,H,W), surprises (T,)). `trans` is an optional
+    (T,3) camera-frame translation velocity for the constant-depth term."""
     T_ = len(fmaps)
     z = np.zeros_like(fmaps, dtype=np.float32)
     sur = np.zeros(T_, dtype=np.float32)
     for t in range(T_):
-        out = canc.step(fmaps[t], gyros[t])
+        tv = trans[t] if trans is not None else None
+        out = canc.step(fmaps[t], gyros[t], tv)
         z[t] = out["z"]
         sur[t] = out["surprise"]
     return z, sur

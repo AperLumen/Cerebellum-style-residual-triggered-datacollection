@@ -49,6 +49,19 @@ def trajectory_gyro(cam_c2w: np.ndarray, fps: float) -> np.ndarray:
     return gyro
 
 
+def trajectory_translation(cam_c2w: np.ndarray, fps: float) -> np.ndarray:
+    """Camera-frame translation velocity (m/s), per frame: v(t) expressed in
+    the cam(t) axes [x=right, y=down, z=forward]. Under a constant-depth
+    scene plane (depth Z), this induces a content shift of -f * v/Z * dt
+    px — the translation counterpart of the rotation shift."""
+    T = len(cam_c2w)
+    vel = np.zeros((T, 3), dtype=np.float32)
+    for t in range(1, T):
+        dp = cam_c2w[t][:3, 3] - cam_c2w[t - 1][:3, 3]
+        vel[t] = cam_c2w[t][:3, :3].T @ dp * fps
+    return vel
+
+
 def calibrate_signs(gyro: np.ndarray, frames: list, fps: float,
                     fx_full: float) -> tuple[np.ndarray, list[float]]:
     """Flip per-axis signs so the predicted content shift correlates
@@ -77,6 +90,43 @@ def calibrate_signs(gyro: np.ndarray, frames: list, fps: float,
         if r < 0:
             gyro[:, ax] *= -1
     return gyro, rs
+
+
+def calibrate_translation(vel: np.ndarray, gyro: np.ndarray,
+                          frames: list, fps: float, fx_full: float
+                          ) -> tuple[np.ndarray, float, list[float]]:
+    """Fold per-axis signs into the translation velocity and fit the
+    constant-depth scale s = 1/Z (1/m) so that the rotation-model residual
+    (DIS-measured shift minus rotation-predicted shift) is best explained.
+    Returns (vel, s, per-axis r). Pure calibration, same status as the
+    gyro sign calibration and f_map: per-segment constants, no per-frame
+    fitting."""
+    n = len(frames)
+    f_flow = fx_full * 320.0 / frames[0].shape[1]
+    idx = np.linspace(1, n - 1, 40).astype(int)
+    dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    resid, tpred = [], []
+    for t in idx:
+        g1 = cv2.resize(cv2.cvtColor(frames[t - 1], cv2.COLOR_BGR2GRAY),
+                        (320, 240))
+        g2 = cv2.resize(cv2.cvtColor(frames[t], cv2.COLOR_BGR2GRAY),
+                        (320, 240))
+        flow = dis_calc(dis, g1, g2)
+        m = flow.reshape(-1, 2).mean(axis=0)
+        p = [-f_flow * np.tan(np.radians(gyro[t][1]) / fps),
+             -f_flow * np.tan(np.radians(gyro[t][0]) / fps)]
+        resid.append(m - p)
+        tpred.append(f_flow * vel[t][:2] / fps)
+    resid, tpred = np.array(resid), np.array(tpred)
+    rs = []
+    for ax in range(2):
+        r = np.corrcoef(tpred[:, ax], resid[:, ax])[0, 1]
+        rs.append(float(r))
+        if r < 0:
+            vel[:, ax] *= -1
+            tpred[:, ax] *= -1
+    s = float((resid * tpred).sum() / (tpred * tpred).sum())
+    return vel, s, rs
 
 
 def main():
@@ -132,15 +182,24 @@ def main():
     print(f"gyro deg/s: mean|.|={np.abs(gyro).mean(axis=0).round(2)} "
           f"p95|yaw|={np.percentile(np.abs(gyro[:,1]),95):.1f}")
 
+    vel = trajectory_translation(traj, fps)
+    vel, trans_scale, trs = calibrate_translation(vel, gyro, frames, fps, fx)
+    print(f"translation calibration r (resid vs v): x={trs[0]:.3f} "
+          f"y={trs[1]:.3f}; constant-depth scale 1/Z = {trans_scale:.3f} 1/m "
+          f"(Z_eff = {1 / trans_scale if trans_scale > 0 else float('inf'):.2f} m)")
+    print(f"translation m/s: mean|.|={np.abs(vel).mean(axis=0).round(3)}")
+
     os.makedirs(f"{args.out}/frames", exist_ok=True)
     for t, fr in enumerate(frames):
         cv2.imwrite(f"{args.out}/frames/frame_{t:06d}.png", fr)
 
     with open(f"{args.out}/imu.csv", "w") as f:
-        f.write("time,gyroscope.x,gyroscope.y,gyroscope.z\n")
+        f.write("time,gyroscope.x,gyroscope.y,gyroscope.z,"
+                "translation.x,translation.y,translation.z\n")
         for t in range(n):
             f.write(f"{t / fps:.6f},{gyro[t][0]:.6f},{gyro[t][1]:.6f},"
-                    f"{gyro[t][2]:.6f}\n")
+                    f"{gyro[t][2]:.6f},{vel[t][0]:.6f},{vel[t][1]:.6f},"
+                    f"{vel[t][2]:.6f}\n")
 
     ann = json.load(open(os.path.join(args.src, "ego_action_annotation.json")))
     events = []
@@ -154,7 +213,10 @@ def main():
     f_map = fx * MAP_W / 1920.0     # 224-input px / 8 stride -> map px
     meta = {"fps": fps, "seconds": n / fps, "events": events,
             "f_map": f_map, "source": os.path.basename(args.src.rstrip("/")),
-            "note": "gyro derived from SLAM camera trajectory"}
+            "trans_scale": trans_scale,
+            "note": "gyro + translation derived from SLAM camera trajectory; "
+                    "trans_scale = per-segment constant-depth 1/Z calibration "
+                    "against DIS flow (translation columns are sign-folded)"}
     with open(f"{args.out}/events.json", "w") as f:
         json.dump(meta, f, indent=2)
     print(f"events: {len(events)} active intervals; f_map={f_map:.2f} "
