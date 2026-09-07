@@ -29,24 +29,25 @@
     {
       "path": "data/aoe_src",
       "type": "external-raw",
-      "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. Segment: aoe_20260214_232847_p000 (181 s egocentric unboxing).",
-      "size": "354M",
-      "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h"
+      "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. 9 segments fetched by scripts/fetch_aoe.py (probe 60 -> greedy scene/verb select -> fetch): aoe_20260214_232847_p000 (kitchen/unboxing) + 8 raw_*_seg_* (bathroom, bedroom, childs-room, dining/kitchen/living, workshop, workspace, shop; 134-301 s each).",
+      "size": "4.1G",
+      "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h",
+      "producers": ["scripts/fetch_aoe.py"]
     },
     {
       "path": "data/aoe",
       "type": "prepared-real",
-      "description": "Open-AoE segment converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), real f_map=11.49, events = active-manipulation intervals.",
-      "size": "2.2G",
-      "producers": ["scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
+      "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total.",
+      "size": "24G",
+      "producers": ["scripts/fetch_aoe.py", "scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
     }
   ],
   "results": [
     {
       "path": "runs/flow_eval.json",
       "producer": "scripts/run_flow_eval.py",
-      "note": "last run: data/aoe --robust (Open-AoE, winsorized stats). Earlier synthetic-rig numbers are in the README tables and are overwritten by the most recent run.",
-      "headline": "AoE robust: gyro stored=0.099 evRec=0.79; gated stats (naive/flow) fire zero clips; calm residual naive 0.0559 vs gyro 0.0563 (ego-motion sub-pixel at 28x28). Synthetic rig (README): calm residual train 0.093/0.079/0.070 (naive/gyro/flow), val-3x 0.221/0.129/0.103; latency gyro 0.032ms, pixel core 0.171ms, backbone 0.827ms, DIS 3.813ms, flow step 4.456ms per frame."
+      "note": "last run: data/aoe --n-val 9 --robust (Open-AoE 9 segments, winsorized stats). Earlier synthetic-rig numbers are in the README tables and are overwritten by the most recent run.",
+      "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination (stored 0.99); gyro-warp calm residual ~= naive everywhere (sub-pixel ego-motion). Latency: DIS 8.3ms, flow step 6.6ms, gyro shift 0.073ms, pixel core 0.199ms, backbone 1.078ms per frame."
     },
     {
       "path": "runs/downstream_results.json",
@@ -57,8 +58,8 @@
     {
       "path": "runs/arbiter_eval.json",
       "producer": "scripts/run_arbiter_eval.py",
-      "note": "last run: data/aoe --robust. Synthetic-rig run: 6/118 val runs vetoed, stored 0.520->0.498, precision 0.146->0.155, evRec 1.0, amortized ~0.15 ms/frame.",
-      "headline": "AoE robust: 114 candidate runs, 1 veto, evRec 0.79->0.71; amortized flow 0.72 ms/frame."
+      "note": "last run: data/aoe --n-val 9 --robust. Synthetic-rig run: 6/118 val runs vetoed, stored 0.520->0.498, precision 0.146->0.155, evRec 1.0, amortized ~0.15 ms/frame.",
+      "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level AdaptiveTrigger stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
     },
     {
       "path": "runs/downstream_clips.json",

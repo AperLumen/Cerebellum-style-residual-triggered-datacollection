@@ -316,13 +316,13 @@ DIS 光流 (320x240)               3.813 ms
 
 - `runs/downstream_results.json` — 下游训练对比（合成 rig）：cerebellum 3.4% 存储 / AP 0.298 / evRec@10 0.96 vs uniform 4x 预算 / AP 0.145 / evRec@10 0.69 vs oracle
 - `runs/flow_eval.json` — 光流基线 + 延迟画像（最近一次为 Open-AoE robust 运行；合成 rig 数字在 README 表）
-- `runs/arbiter_eval.json` — 仲裁级联（最近一次为 Open-AoE robust 运行：114 候选、1 否决）
+- `runs/arbiter_eval.json` — 仲裁级联（最近一次为 Open-AoE robust 运行：140 候选 run/段、否决 8–31%、stored 0.89→0.72、evRec 1.00→0.94）
 - `runs/aoe_peaks/` — 真实数据残差峰值帧（快速手部运动 + 运动模糊，AUC 0.47 反相关的视觉证据）
-- `data/aoe_src/` — Open-AoE 原始 segment（含 SLAM 轨迹与原子动作标注，来源 hf-mirror inclusionAI/OpenAoE-2000h）
+- `data/aoe_src/` — Open-AoE 原始 segment（含 SLAM 轨迹与原子动作标注，来源 hf-mirror inclusionAI/OpenAoE-2000h；由 scripts/fetch_aoe.py 按场景/动作多样性选取）
 
 ### 4.2 当前边界（实测，非推测）
 
-1. 合成 rig 上全流程成立；真实 egocentric 视频上触发已恢复（robust 统计）但**单 segment、单场景**，结论待多 segment 检验；
+1. 合成 rig 上全流程成立；真实 egocentric 视频上触发已恢复（robust 统计），且已在 9 个跨场景 segment 上复现（stored 中位 9.2%、evRec 中位 0.46、仲裁级联行为一致）——但都是桌面/室内静态场景，行走级运动仍未检验；
 2. gyro warp 在桌面级自运动 regime 下物理上中性——伴随放电的价值要在更剧烈运动或更细分辨率下才兑现；
 3. 光流仲裁级联的价值（结构保险）尚未在真实失效模式（roll/视差/大标定误差）上兑现；
 4. 真实数据上的"值不值"还没用 §2.3.2 的方法重测——真实数据下游价值实验是下一个里程碑；

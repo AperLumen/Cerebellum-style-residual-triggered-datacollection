@@ -411,16 +411,20 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 The synthetic rig is pure global yaw/pitch, so a first real-world check
 uses [Open-AoE](https://github.com/ant-research/Open-AoE) (inclusionAI/
 OpenAoE-2000h on HF): ~700h of consumer-phone egocentric video with a
-visual-SLAM camera trajectory and time-aligned atomic-action labels. One
-segment (`aoe_20260214_232847_p000`, 181 s, 5430 frames, grasp/peel/press/
-tear/...) was prepared by `scripts/prep_aoe.py`, which differentiates
-`cam_c2w` into the gyro-like signal the pipeline expects (per-axis signs
-auto-calibrated against DIS flow, r = 0.53 / 0.60) and writes the standard
-sequence layout, with the real `f_map = 11.49` (fx 787.8, not the
-synthetic rig's 24.25).
+visual-SLAM camera trajectory and time-aligned atomic-action labels. Nine
+diverse segments (bathroom / bedroom / childs-room / dining / kitchen /
+living-room / workshop / workspace / shop, 134–301 s each, 67.4k frames
+total) were selected from a 60-segment probe by `scripts/fetch_aoe.py`
+(greedy scene/verb coverage, duration and head-motion filters) and
+prepared by `scripts/prep_aoe.py`, which differentiates `cam_c2w` into
+the gyro-like signal the pipeline expects (per-axis signs
+auto-calibrated against DIS flow; |r| = 0.18–0.93, worst on two
+near-static clips where there is no motion to correlate) and writes the
+standard sequence layout, with each phone's real focal length
+(`f_map` = 10.95–19.17, fx 751–1315, not the synthetic rig's 24.25).
 
-Measured on this segment — three findings that the synthetic rig could not
-produce:
+Measured first on one segment (seq_000), then generalized across all nine —
+three findings that the synthetic rig could not produce:
 
 1. **Real ego-motion is sub-pixel at 28x28.** Median content shift is
    0.013 map px (p95 0.05, max 0.16), so the gyro warp is physically
@@ -454,18 +458,35 @@ produce:
    metric is downstream value of the selected clips (as in the
    downstream section above), not label alignment.
 
-The flow arbiter finally has candidates to vet on real data (114 runs
-under robust stats) and vetoes 1 — at the cost of dropping one event
-interval (evRec 0.79 -> 0.71): with ego-motion sub-pixel, the one run
-flow can explain is real content change, not modeling error. Consistent
-with the synthetic findings, from the opposite direction.
+Across all nine segments the three findings hold: gyro-warp calm residual
+never beats naive by more than noise (sub-pixel ego-motion everywhere,
+median content shift < 0.05 map px); the robust-stats trigger fires on
+every clip (stored 1.2–13.1%, median 9.2%, event recall 0.14–0.79, median
+0.46 vs action labels — the seq_000 spread, now with error bars); and the
+DIS flow baseline still mostly fires zero clips under the same gated
+stats, except where flow itself hallucinates triggers (seq_004: 99%
+stored). Per-sequence numbers: `runs/flow_eval.json`.
+
+At the runs level the arbiter generalizes too (`runs/arbiter_eval.json`):
+across the nine clips, 140 candidate runs/seq under robust stats, the
+cascade vetoes 8–31% of them (flow calls amortize to 0.89 ms/frame),
+cutting storage 0.89 -> 0.72 of flagged frames at precision 0.994 with
+event recall 1.00 -> 0.94; at the clip level, AdaptiveTrigger stored
+7.9% -> 20.6% with recall 0.49 -> 0.55 — the vetoed runs were dominated
+by ego-motion modeling error even at sub-pixel shifts.
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
-    --out data/aoe/val/seq_000
+# pick + download segments (probe -> select -> fetch, each cached)
+.venv/bin/python scripts/fetch_aoe.py probe --n 60
+.venv/bin/python scripts/fetch_aoe.py select --k 8
+.venv/bin/python scripts/fetch_aoe.py fetch
+# convert to the standard sequence layout, one dir per segment
+for d in data/aoe_src/<segment>; do
+  PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py "$d" --out data/aoe/val/seq_XXX
+done
 PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe
-PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1 --robust
-PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1 --robust
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 9 --robust
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 9 --robust
 ```
 
 ## Honest limitations
