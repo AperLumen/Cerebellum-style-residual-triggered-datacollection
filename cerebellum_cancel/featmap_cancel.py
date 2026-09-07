@@ -31,6 +31,12 @@ class CancelConfig:
     warmup: int = 10         # frames before any update
     border: int = 2          # cells excluded from readout (roll wrap-around)
     use_warp: bool = True    # False = naive frame-diff ablation
+    robust: bool = False     # True = winsorized always-update stats
+                             # (the gated EMA freezes when surprise is dense —
+                             #  measured on real video: 96% of frames blocked —
+                             #  winsorizing the stat update at `winsor` sigma
+                             #  makes outliers unable to inflate or freeze it)
+    winsor: float = 3.0      # clip (in sd units) applied to the stat update
 
 
 def shift_map(F: np.ndarray, dx: float, dy: float) -> np.ndarray:
@@ -83,17 +89,29 @@ class FeatureMapCancel:
         surprise = float(np.abs(z[:, b:-b, b:-b]).max())
 
         self.n += 1
-        # During warmup, update unconditionally: the gate needs calibrated
-        # stats to mean anything, and the first frames of a recording are
-        # background by construction (events are injected later).
-        calm = surprise < self.cfg.calm_tau or self.n <= self.cfg.warmup
-        if calm:
-            d = err - self.mu
-            self.mu += self.cfg.std_ema * d
-            self.var += self.cfg.std_ema * (d * d - self.var)
+        lr = self.cfg.std_ema
+        if self.cfg.robust:
+            # Winsorized always-update: outliers enter the running stats
+            # clipped at `winsor` sigma, so they can neither inflate the
+            # scale (raising the trigger bar) nor freeze it via a gate —
+            # real video is surprising most of the time.
+            d = np.clip(err - self.mu,
+                        -self.cfg.winsor * sd, self.cfg.winsor * sd)
+            self.mu += lr * d
+            self.var += lr * (d * d - self.var)
+            learned = self.n > self.cfg.warmup
+        else:
+            # During warmup, update unconditionally: the gate needs calibrated
+            # stats to mean anything, and the first frames of a recording are
+            # background by construction (events are injected later).
+            calm = surprise < self.cfg.calm_tau or self.n <= self.cfg.warmup
+            if calm:
+                d = err - self.mu
+                self.mu += lr * d
+                self.var += lr * (d * d - self.var)
+            learned = calm and self.n > self.cfg.warmup
         self.F_prev = F
-        return {"z": z, "surprise": surprise,
-                "learned": calm and self.n > self.cfg.warmup}
+        return {"z": z, "surprise": surprise, "learned": learned}
 
 
 def rollout(canc: FeatureMapCancel, fmaps: np.ndarray,

@@ -251,17 +251,17 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 在此 segment 上实测——三条合成 rig 给不出的发现：
 
 1. **真实自运动在 28×28 上是亚像素的**。内容位移中位数 0.013 特征图像素（p95 0.05，max 0.16），所以 gyro warp 在物理上是中性的：平静残差 naive 0.0323 vs gyro 0.0328。伴随放电 warp 只有在更细分辨率、更深层特征、或行走级运动下才物有所值——桌面第一视角 + 224 px 输入的场景里用不上。
-2. **平衡门在真实数据上会冻结**。96.4% 的帧 surprise > 4，warmup 之后运行统计只在 3.6% 的帧上更新，sd 单向衰减（0.92 → 0.17）；z 饱和（max|z| 中位数 = 13），两种读数朝相反方向退化：固定阈值 run 覆盖全部帧的 92%，而 `AdaptiveTrigger` 的相对归一化**一次 clip 都不触发**。平静门假设（surprise 是稀疏的）对 pop-in 式合成事件成立，对真实视频不成立。改成总是更新统计后触发器恢复工作（7 clips，evRec 0.57），所以可修——下一步是稳健统计重构（median/MAD + always-update）。
+2. **平衡门在真实数据上会冻结**。96.4% 的帧 surprise > 4，warmup 之后运行统计只在 3.6% 的帧上更新，sd 单向衰减（0.92 → 0.17）；z 饱和（max|z| 中位数 = 13），两种读数朝相反方向退化：固定阈值 run 覆盖全部帧的 92%，而 `AdaptiveTrigger` 的相对归一化**一次 clip 都不触发**。平静门假设（surprise 是稀疏的）对 pop-in 式合成事件成立，对真实视频不成立。修法是 winsorized always-update 统计（`CancelConfig.robust`）：离群值以 3 倍 sigma 截断后进入运行统计，既撑不大尺度也不会把门冻住。换成稳健统计后触发器恢复工作：**stored 9.9%、事件 recall 0.79（此前为 0 clips）**。一个有力的旁证：DIS 光流基线（`FlowWarpCancel`）共用同一套门控统计，在真实视频上同样 0 clips——失效的是门，不是预测器。
 3. **残差尖峰是真实的，但与动作标注不对齐**。残差最高的帧是快速手/物体运动+运动模糊（`runs/aoe_peaks/`），但分数与标注的动作区间*反*相关（AUC 0.47）：原子动作是运动能量起伏的长区间，而残差索引的是运动瞬变。因此帧级 event-recall 对照人类动作标注在真实数据上是错误指标；对残差触发*存储选择*架构来说，有意义的指标是被选片段的下游价值（见上节），而不是标注对齐。
 
-光流仲裁在此 segment 上同样无可否决（0/47 run）：自运动 ≈ 0 且尖峰由真实内容变化引起，没有建模误差可供光流解释——与合成发现方向相反，结论一致。
+光流仲裁在真实数据上终于有候选可审（稳健统计下 114 个 run），否决 1 个——代价是丢了一个事件区间（evRec 0.79 → 0.71）：自运动亚像素时，光流能解释的那个 run 是真实内容变化，不是建模误差。与合成发现方向相反，结论一致。
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
     --out data/aoe/val/seq_000
 PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe
-PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1
-PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1 --robust
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1 --robust
 ```
 
 ## 诚实的局限性

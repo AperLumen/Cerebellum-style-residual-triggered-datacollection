@@ -53,10 +53,11 @@ def load_seq(seq):
     return fm[:n], frames[:n], gyro[:n], meta, fps, labels, n
 
 
-def cancel_cfg(meta: dict) -> "CancelConfig":
+def cancel_cfg(meta: dict, robust: bool = False) -> "CancelConfig":
     """CancelConfig honoring a per-sequence f_map (real cameras: fx differs
-    from the synthetic rig's default)."""
-    cfg = CancelConfig(fps=float(meta.get("fps", 30.0)))
+    from the synthetic rig's default) and the robust-stats variant."""
+    cfg = CancelConfig(fps=float(meta.get("fps", 30.0)),
+                       robust=robust)
     if "f_map" in meta:
         cfg.f_map = float(meta["f_map"])
     return cfg
@@ -186,6 +187,8 @@ def main():
     ap.add_argument("dataset", default="data/dataset")
     ap.add_argument("--n-train", type=int, default=15)
     ap.add_argument("--n-val", type=int, default=5)
+    ap.add_argument("--robust", action="store_true",
+                    help="median/MAD always-update stats (for real video)")
     args = ap.parse_args()
 
     results = {"quality": {"train": {}, "val": {}}, "clips": {}}
@@ -198,10 +201,11 @@ def main():
             fm, frames, gyro, meta, fps, labels, n = load_seq(seq)
             events = [tuple(e) for e in meta["events"]]
             rows = {}
-            cfg_naive = cancel_cfg(meta)
+            cfg_naive = cancel_cfg(meta, args.robust)
             cfg_naive.use_warp = False
             for name, canc in [("naive", FeatureMapCancel(cfg_naive)),
-                               ("gyro", FeatureMapCancel(cancel_cfg(meta))),
+                               ("gyro", FeatureMapCancel(
+                                   cancel_cfg(meta, args.robust))),
                                ("flow", FlowWarpCancel(FlowWarpConfig()))]:
                 if name == "flow":
                     z, _ = rollout_flow(canc, fm, frames)

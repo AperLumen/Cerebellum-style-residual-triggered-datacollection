@@ -435,9 +435,14 @@ produce:
    directions: fixed-threshold runs cover 92% of all frames, while
    `AdaptiveTrigger`'s relative normalization fires **zero** clips. The
    calm-gate assumption (surprise is sparse) holds for pop-in synthetic
-   events and fails for real video. With always-updating stats the
-   trigger fires again (7 clips, evRec 0.57), so this is fixable — a
-   robust-stats redesign (median/MAD, always-update) is the next step.
+   events and fails for real video. The fix is winsorized always-update
+   stats (`CancelConfig.robust`): outliers enter the running stats
+   clipped at 3 sigma, so they can neither inflate the scale nor freeze
+   it through the gate. With robust stats the trigger fires again on
+   this segment: **9.9% stored at 0.79 event recall (zero clips
+   before)**. Telling cross-check: the DIS flow baseline
+   (`FlowWarpCancel`) shares the same gated stats and also fires zero
+   clips on real video — the gate, not the predictor, was the failure.
 3. **Residual spikes are real but misaligned with action labels.** The
    top residual frames are fast hand/object motion with motion blur
    (`runs/aoe_peaks/`), yet the score is *anti*-correlated with the
@@ -449,17 +454,18 @@ produce:
    metric is downstream value of the selected clips (as in the
    downstream section above), not label alignment.
 
-The flow arbiter had nothing to veto on this segment (0/47 runs): with
-ego-motion ~0 and spikes caused by real content change, there is no
-modeling error for flow to explain — consistent with the synthetic
-findings, from the opposite direction.
+The flow arbiter finally has candidates to vet on real data (114 runs
+under robust stats) and vetoes 1 — at the cost of dropping one event
+interval (evRec 0.79 -> 0.71): with ego-motion sub-pixel, the one run
+flow can explain is real content change, not modeling error. Consistent
+with the synthetic findings, from the opposite direction.
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
     --out data/aoe/val/seq_000
 PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe
-PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1
-PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1 --robust
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1 --robust
 ```
 
 ## Honest limitations

@@ -39,11 +39,11 @@ DIS_MS = 3.813      # measured in run_flow_eval.py bench (this machine)
 ONSET_Z = 6.0       # match AdaptiveTrigger's default onset
 
 
-def gyro_trace(fm, gyro, meta, fmap_scale=1.0):
+def gyro_trace(fm, gyro, meta, fmap_scale=1.0, robust=False):
     """Gyro rollout; returns (z trace, sd trace after each step).
     fmap_scale != 1 simulates focal-length miscalibration (the structured
     ego-motion modeling error the arbiter exists to catch)."""
-    cfg = cancel_cfg(meta)
+    cfg = cancel_cfg(meta, robust)
     cfg.f_map *= fmap_scale
     canc = FeatureMapCancel(cfg)
     zs, sds = [], []
@@ -149,6 +149,8 @@ def main():
     ap.add_argument("--fmap-scale", type=float, default=1.0,
                     help="simulate focal-length miscalibration in the gyro "
                          "warp (1.0 = calibrated)")
+    ap.add_argument("--robust", action="store_true",
+                    help="median/MAD always-update stats (for real video)")
     args = ap.parse_args()
 
     results = {}
@@ -162,7 +164,7 @@ def main():
         for seq in seqs:
             fm, frames, gyro, meta, fps, labels, n = load_seq(seq)
             events = [tuple(e) for e in meta["events"]]
-            z, _ = gyro_trace(fm, gyro, meta, args.fmap_scale)
+            z, _ = gyro_trace(fm, gyro, meta, args.fmap_scale, args.robust)
             score = maxcell_score(z)          # published readout: sum_c z^2,
                                               # max over interior cells
             runs = candidate_runs(np.abs(z).max(axis=(1, 2, 3)))
