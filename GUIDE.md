@@ -99,7 +99,7 @@ DIS 光流 (320x240)               3.813 ms
 
 1. **伴随放电的代价是 30 微秒**——一个矩阵平移运算。这是"副本"相对"用感觉补偿感觉"的成本比：单看 warp 步是 ~120 倍，看整个像素管线是 26 倍。30 fps 预算下像素管线用掉 0.5% 的帧时间，而"每帧跑光流"用掉 13%——后者在常开约束下不可接受。
 2. **光流确实买到残差质量**：平静帧残差 naive 0.093 → gyro 0.079 → flow 0.070（train 1x）；val 3x 是 0.221 → 0.129 → 0.103。即 gyro 相对光流的残差质量差约 11–20%。**这是诚实的代价**：花 100 倍的成本买 15% 的残差质量，在"常开筛选层"这个 use case 里不划算——但光流作为质量上限和按需仲裁者（§2.3.4）是另一回事。
-3. ** laptop 数字还要再打折**：MPS 有 GPU 加速；手机 CPU 上 DIS 通常再慢数倍，而 gyro shift 是 O(像素数) 的内存搬运，差距只会更大。
+3. **laptop 折扣已有实测边界**：MPS 有 GPU 加速，但 CPU 实测（`scripts/run_portable_check.py`）backbone 前向 1.76 ms vs MPS 1.06 ms（仅 1.7 倍），且 CPU/MPS 特征逐位一致（最大相对差 2e-6，下游残差差 3.7e-9）——管道数值上可跨设备复现，CPU 上仍远低于单帧预算。剩余的未测量边界是手机级硬件。gyro shift 是 O(像素数) 的内存搬运，设备越弱差距只会越大。
 
 ### 1.5 MVP 定位与成功判据
 
@@ -150,7 +150,7 @@ DIS 光流 (320x240)               3.813 ms
 
 **结果。** 残差：train 1x naive 0.093 / gyro 0.079 / flow 0.070；val 3x 0.221 / 0.129 / 0.103。延迟：见 §1.4 表。附带发现：DIS 在 12 px 位移下直接跟丢（搜索范围限制），且事件区域会污染局部流场。
 
-**结论。** 光流是质量上限（残差低 11–20%），但在常开约束下贵 2 个数量级以上，且依赖纹理、怕大位移。gyro warp 是正确层次的选择——这条用对手的方法测自己的代价，比只报自己的指标有说服力得多。
+**结论。** 光流是质量上限（残差低 11–20%），但在常开约束下贵 2 个数量级以上，且依赖纹理、怕大位移。gyro warp 是正确层次的选择——这条用对手的方法测自己的代价，比只报自己的指标有说服力得多。上限的稳健性也验证过：RAFT（学习式 SOTA）接进同一路径后与 DIS 打平（合成 0.105 vs 0.106）或略差（真实 0.054 vs 0.052），慢 20 倍——"flow 是上限"不是 DIS 太弱造成的假象。
 
 #### 2.3.2 下游训练对比——架构核心命题：残差选中值不值
 
@@ -315,7 +315,10 @@ DIS 光流 (320x240)               3.813 ms
 所有数据集、结果 JSON、图表、日志的完整索引（路径、生成脚本、头指标）见 **[manifest.json](manifest.json)**。关键结果文件：
 
 - `runs/downstream_results.json` — 下游训练对比（合成 rig）：cerebellum 3.4% 存储 / AP 0.298 / evRec@10 0.96 vs uniform 4x 预算 / AP 0.145 / evRec@10 0.69 vs oracle
-- `runs/flow_eval.json` — 光流基线 + 延迟画像（最近一次为 Open-AoE robust 运行；合成 rig 数字在 README 表）
+- `runs/raft_eval_data_dataset_val.json` / `runs/raft_eval_data_aoe_motion_val.json` — RAFT 光流上限对照（`scripts/run_raft_eval.py`）：合成 val 5 段 RAFT 0.1054 ≈ DIS 0.1056；真实高运动 2 段 RAFT 0.0544 vs DIS 0.0522；RAFT 慢 ~20 倍
+- `runs/portable_check.json` — CPU vs MPS 可移植性（`scripts/run_portable_check.py`）：特征最大相对差 2e-6、下游残差差 3.7e-9；backbone 1.76 ms (CPU) vs 1.06 ms (MPS)
+- `runs/flow_eval_motion.json` — 真实高运动 224px（naive 0.080 / gyro 0.090 / flow 0.052）；`runs/flow_eval_motion448.json` — 同对片段 448px 交叉（0.0535 / 0.0614 / 0.0684，设计规则未迁移）；`runs/flow_eval_synth448.json` — 合成 448px（分辨率收益 -58% 的参照）
+- `runs/flow_eval.json` — `run_flow_eval.py` 的最近一次输出（每次运行覆盖；历史运行均已按上表备份为独立文件）
 - `runs/arbiter_eval.json` — 仲裁级联（最近一次为 Open-AoE robust 运行：140 候选 run/段、否决 8–31%、stored 0.89→0.72、evRec 1.00→0.94）
 - `runs/aoe_peaks/` — 真实数据残差峰值帧（快速手部运动 + 运动模糊，AUC 0.47 反相关的视觉证据）
 - `data/aoe_src/` — Open-AoE 原始 segment（含 SLAM 轨迹与原子动作标注，来源 hf-mirror inclusionAI/OpenAoE-2000h；由 scripts/fetch_aoe.py 按场景/动作多样性选取）
@@ -323,7 +326,7 @@ DIS 光流 (320x240)               3.813 ms
 ### 4.2 当前边界（实测，非推测）
 
 1. 合成 rig 上全流程成立；真实 egocentric 视频上触发已恢复（robust 统计），且已在 9 个跨场景 segment 上复现（stored 中位 9.2%、evRec 中位 0.46、仲裁级联行为一致）——但都是桌面/室内静态场景，行走级运动仍未检验；
-2. gyro warp 的收益被分辨率门控（实测三档输入：验证集平静残差收益 -41%/-52%/-58%，未饱和）：桌面级自运动在 224 px 下物理中性（亚像素），高运动段进入模型误差窗口反而帮倒忙——兑现价值的配法是细粒度特征（patch token / ≥448 px 输入），成本 ~0.09 ms/帧；roll 未建模、无平移是下一个要补的模型缺口；
+2. gyro warp 的收益被分辨率门控，但这条设计规则只在合成数据上成立（实测三档输入：验证集平静残差收益 -41%/-52%/-58%，未饱和；桌面级自运动在 224 px 下物理中性（亚像素）。448 px 真实高运动交叉（`runs/flow_eval_motion448.json`）证伪了向真实的迁移：gyro 依然帮倒忙（+15%），光流逐段翻转——真实数据的损伤由纯旋转模型看不见的成分主导（平移/视差、滚动快门），分辨率修估计器误差、修不了模型类误差。下一个要补的模型缺口是平移，不是分辨率；roll 未建模仍是次级缺口；
 3. 光流仲裁级联的价值（结构保险）尚未在真实失效模式（roll/视差/大标定误差）上兑现；
 4. 真实数据上的"值不值"还没用 §2.3.2 的方法重测——真实数据下游价值实验是下一个里程碑；
 5. 真 gyro 通路（iPhone 实拍）未验证；SLAM 轨迹是替身，且在低纹理/快速运动时 SLAM 自身失效——两种失败模式要分开看。

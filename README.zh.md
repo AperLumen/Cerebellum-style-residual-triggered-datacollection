@@ -194,6 +194,29 @@ gyro warp             0.079       0.129         0.113   0.30
 DIS 光流 warp          0.070       0.103         0.192   0.33
 ```
 
+**更强的光流估计器在这里打不过 DIS。**把 RAFT（Teed & Deng, ECCV 2020,
+raft-things 权重）接进同一条 warp 路径（`scripts/run_raft_eval.py`），
+回答"flow 上限会不会只是 DIS 太弱造成的假象"：
+
+```
+                    平静帧残差（mean |err|）      ms/帧
+                    合成验证集   真实高运动（224px, robust）
+naive                 0.221          0.080               --
+gyro warp             0.129          0.090             0.033
+DIS 光流 warp          0.106          0.052         5.9 / 7.4
+RAFT 光流 warp         0.105          0.054       134 / 138
+```
+
+（合成验证集 5 条；真实高运动 2 条。）RAFT 在合成上与 DIS 打平
+（0.1054 vs 0.1056），在真实上略差（0.0544 vs 0.0522），同时慢 ~20 倍。
+flow 上限是任务本身的属性，与估计器无关；gyro 与 flow 的残差差距
+无法靠换学习式光流模型弥合。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_raft_eval.py data/dataset --split val --n-seq 5
+PYTHONPATH=. .venv/bin/python scripts/run_raft_eval.py data/aoe_motion --split val --n-seq 2 --robust
+```
+
 本机每帧延迟中位数（320x240 帧，24x28x28 特征图）：
 
 ```
@@ -210,7 +233,9 @@ DIS 光流 (320x240)         3.813
 1. **光流确实买到残差质量**——平静帧残差比 gyro warp 低 11%（1x）/ 20%（3x）（DIS 追踪的是内容的真实位移，包括陀螺近似漏掉的部分）。这是真实存在的、光流基线最大的优势。
 2. **代价是整个像素 pipeline 的 26 倍**（4.5 ms vs 0.17 ms 每帧，仅 warp 一步就差 ~120 倍）——30 fps 预算下像素 pipeline 占帧时间 0.5%，flow 步占 13%。且这些计时是在笔记本上；在端上（手机 CPU、无 MPS）DIS 通常还要慢好几倍。
 3. **它依赖纹理和稳定性**：快速运动下 DIS 会跟丢（一条 3x 验证序列存了 59% 的流，gyro 只有 13%——光流噪声会被当成 surprise）；无纹理或低光区域无解，而 gyro warp 不受影响。事件区域会污染局部流场，泄漏进残差。
-4. **架构层面的解读**：gyro warp 是一个 ~30 微秒的矩阵运算，把 IMU 变成了伴随放电；光流是一个每帧都要跑的计算机视觉计算，而且必须先于它服务的补偿步骤执行。对于一个以*廉价常开*的惊讶检测为全部意义的设备，IMU 是对的层次——光流是用来对照的质量上限，残差质量差距（11-20%）是 100 倍成本比下诚实的代价。亚像素 gyro shift 和更好的 f_map 标定能缩小这部分差距。
+4. **架构层面的解读**：gyro warp 是一个 ~30 微秒的矩阵运算，把 IMU 变成了伴随放电；光流是一个每帧都要跑的计算机视觉计算，而且必须先于它服务的补偿步骤执行。对于一个以*廉价常开*的惊讶检测为全部意义的设备，IMU 是对的层次——光流是用来对照的质量上限（已用 RAFT 确认与估计器无关），残差质量差距（11-20%）是 100 倍成本比下诚实的代价。亚像素 gyro shift 和更好的 f_map 标定能缩小这部分差距。
+
+**跨平台可移植性**（`scripts/run_portable_check.py`，`runs/portable_check.json`）：唯一依赖设备的阶段是冻结 backbone 前向。同一批帧在 CPU vs MPS 下：特征最大相对差 2e-6，下游 gyro 平静残差差 3.7e-9——取消路径在数值上可跨设备复现。延迟：backbone CPU 1.76 ms vs MPS 1.06 ms（仅 1.7 倍），管道在 CPU 上仍远低于 30 fps 的单帧预算。剩余的未测量边界是手机级硬件（无笔记本 MPS、核更慢）。
 
 复现：
 
@@ -289,6 +314,13 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 run 级别的光流仲裁同样推广（`runs/arbiter_eval.json`）：九个片段上稳健统计产生约 140 个候选 run/段，级联否决其中的 8–31%（光流调用摊销到 0.89 ms/帧），把被标记帧的存储量从 0.89 降到 0.72，precision 保持 0.994，事件 recall 1.00 → 0.94；clip 级别上 AdaptiveTrigger stored 7.9% → 20.6%、recall 0.49 → 0.55——被否决的 run 即便在亚像素位移下也主要由自运动建模误差主导。
 
 **高运动端**（259 段探测池里运动 top 的 2 段，p95 |yaw| 31–52°/s，桌面片段为 1–41；`data/aoe_motion`、`runs/flow_eval_motion.json`）终于离开了亚像素 regime——预测器的排序随之翻转，但带保留。平静残差：gyro warp 现在比 naive *更差*（0.090 vs 0.080；二维平移模型不补偿 roll，且该段符号标定更弱，仓库段 y r = 0.15），而 DIS 光流在质量上明确胜出（0.052）——成本上则以 ~250 倍落败（8.4 ms vs 0.033 ms/帧）。稳健触发器也变稀（stored 1.4%/1.2%，evRec 0.09/0.04）：连续真实运动让残差重尾化，winsorized sd 膨胀，z 阈值水涨船高。仲裁正是这个 regime 的桥：在最活跃的片段上否决 11% 的 run（stored 0.92 → 0.62，precision 1.00，摊销 0.58 ms/帧）。诚实的底线：在这个语料上即使 top-decile 的旋转量在 28×28 上也只有 ~0.5 特征图像素/帧，所以 gyro warp 在该分辨率下的质量窗口很窄——它的理由是成本，光流仲裁是廉价模型失效时的付费升级。（n=2，且上述标定保留成立。）
+
+**448 px 分辨率交叉验证**（同一对片段，特征图翻倍至 38×38；`data/aoe_motion_448`、`runs/flow_eval_motion448.json`）：设计规则"特征越细 gyro warp 越值"——在合成数据上单调成立（224/336/448 收益 -41%/-52%/-58%）——**不能迁移到真实高运动**。gyro 依然比 naive 差（0.0535 → 0.0614，+15%），DIS 光流逐段翻转（走廊段 0.086、仓库段 0.051；均值 0.068，两段中有一段比 naive 还差）。在真实数据上，损伤主要由纯旋转模型看不见的东西主导——平移/视差、滚动快门畸变——而更多像素让它们*更显眼*而非更不显眼。分辨率修的是估计器误差，修不了模型类误差。下一个要补的模型缺口是平移，不是分辨率：
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_448 \
+  --n-train 0 --n-val 2 --robust
+```
 
 ```bash
 # 挑选 + 下载 segment（probe -> select -> fetch，每步有缓存）

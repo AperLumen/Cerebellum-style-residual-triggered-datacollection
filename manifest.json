@@ -1,130 +1,205 @@
 {
-  "project": "cerebellum-style residual-triggered data collection",
-  "description": "MVP of a data-collection layer that stores only what a camera+IMU rig cannot predict (corollary-discharge cancellation + residual triggering), inspired by Perks et al., Nature 2026 (doi:10.1038/s41586-026-10690-6).",
-  "guide": "GUIDE.md",
-  "readme": ["README.md", "README.zh.md"],
-  "updated": "2026-09-07",
-  "datasets": [
-    {
-      "path": "data/dataset",
-      "type": "synthetic-rig",
-      "description": "Rendered rig: static textured scene + gyro-driven camera rotation + injected blob/bar surprise events. The primary benchmark (train/val splits, frames + imu.csv + events.json + featmaps.npy per sequence).",
-      "size": "3.0G",
-      "producers": ["scripts/make_dataset.py", "scripts/extract_featmaps.py"]
-    },
-    {
-      "path": "data/synthetic",
-      "type": "synthetic-demo",
-      "description": "60-second single-scene demo used by the pixel-pipeline experiment (scripts/run_experiment.py).",
-      "size": "77M",
-      "producers": ["scripts/make_synthetic.py"]
-    },
-    {
-      "path": "data/webcam_rec",
-      "type": "real-capture",
-      "description": "Webcam field test: real camera, synthetic scene motion, no IMU (sines emulated offline). Used for the webcam readout in README.",
-      "size": "18M",
-      "producers": ["scripts/capture_webcam.py"]
-    },
-    {
-      "path": "data/aoe_src",
-      "type": "external-raw",
-      "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. 9 segments fetched by scripts/fetch_aoe.py (probe 60 -> greedy scene/verb select -> fetch): aoe_20260214_232847_p000 (kitchen/unboxing) + 8 raw_*_seg_* (bathroom, bedroom, childs-room, dining/kitchen/living, workshop, workspace, shop; 134-301 s each).",
-      "size": "4.1G",
-      "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h",
-      "producers": ["scripts/fetch_aoe.py"]
-    },
-    {
-      "path": "data/aoe_motion",
-      "type": "prepared-real",
-      "description": "High-motion Open-AoE pair (top of 259-probed pool by trajectory rotation: p95 |yaw| 51.6/31.0 deg/s; bathroom/hallway/laundry + warehouse/workshop), same layout as data/aoe. Frames deleted after evals (regenerate via prep_aoe.py).",
-      "size": "0.5G",
-      "producers": ["scripts/fetch_aoe.py", "scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
-    },
-    {
-      "path": "data/aoe",
-      "type": "prepared-real",
-      "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing.",
-      "size": "2.4G",
-      "producers": ["scripts/fetch_aoe.py", "scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
-    }
-  ],
-  "results": [
-    {
-      "path": "runs/flow_eval_res224.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 224 px input (40 train + 25 val seqs); part of the resolution series, see runs/flow_eval_res336/448.json",
-      "headline": "synthetic rig @224px (f_map 24.25): val calm residual naive 0.221 / gyro 0.130 / flow 0.107; gyro shift 0.032 ms, DIS 3.86 ms per frame."
-    },
-    {
-      "path": "runs/flow_eval_res336.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 336 px (f_map 36.38). backbone_fwd_ms re-measured standalone after fixing bench() to honor --size (bench_note inside the JSON).",
-      "headline": "synthetic rig @336px: val calm residual naive 0.187 / gyro 0.089 / flow 0.069 (-52% gyro gain); gyro shift 0.061 ms, DIS 4.20 ms per frame."
-    },
-    {
-      "path": "runs/flow_eval_res448.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 448 px (f_map 48.50). backbone_fwd_ms re-measured standalone (bench_note inside the JSON). At 448 px the gated trigger froze to 0 clips on all 5 checked val seqs; winsorized robust stats fired on all 5 (val seq_000..004, checked in the same session).",
-      "headline": "synthetic rig @448px: val calm residual naive 0.169 / gyro 0.072 / flow 0.052 (-58% gyro gain, monotone in resolution, not saturated); gyro shift 0.087 ms, DIS 4.35 ms per frame; flow/gyro gap narrows 0.82 -> 0.73."
-    },
-    {
-      "path": "runs/flow_eval.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "last run: data/aoe_motion --n-val 2 --robust (high-motion pair). The n=9 desk-clip run was overwritten and rebuilt from its logged output as runs/flow_eval_aoe9.json (aggregate fields exact; clip counts/event_frame_cover not printed in the log).",
-      "headline": "aoe_motion robust: calm residual naive 0.080 / gyro 0.090 (warp hurts: roll uncompensated, weak y-cal) / flow 0.052 (quality winner, 8.4ms vs 0.033ms gyro shift); gyro clips stored 1.4%/1.2% evRec 0.09/0.04 (heavy tail inflates winsorized sd). AoE n=9 desk numbers: see runs/flow_eval_aoe9.json and README."
-    },
-    {
-      "path": "runs/flow_eval_aoe9.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "rebuilt from logged per-seq output of the 27ed74d n=9 run (see runs/flow_eval.json note)",
-      "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination; gyro-warp calm residual ~= naive everywhere."
-    },
-    {
-      "path": "runs/downstream_results.json",
-      "producer": "scripts/train_downstream.py",
-      "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
-      "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
-    },
-    {
-      "path": "runs/arbiter_eval.json",
-      "producer": "scripts/run_arbiter_eval.py",
-      "note": "last run: data/aoe_motion --n-val 2 --robust. The n=9 desk-clip run was overwritten and rebuilt from its logged aggregate output as runs/arbiter_eval_aoe9.json.",
-      "headline": "aoe_motion robust: seq_000 130 runs, 14 vetoes, runs-level stored 0.92->0.62 at precision 1.00 (evRec 1.00->0.82); seq_001 0 vetoes; amortized flow 0.58 ms/frame. AoE n=9 desk numbers: 140 runs/seq, stored 0.89->0.72, evRec 1.00->0.94 (runs/arbiter_eval_aoe9.json)."
-    },
-    {
-      "path": "runs/arbiter_eval_aoe9.json",
-      "producer": "scripts/run_arbiter_eval.py",
-      "note": "rebuilt from logged aggregate output of the 27ed74d n=9 run (see runs/arbiter_eval.json note)",
-      "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
-    },
-    {
-      "path": "runs/downstream_clips.json",
-      "producer": "scripts/train_downstream.py",
-      "note": "per-clip selection records for the downstream comparison"
-    }
-  ],
-  "figures": [
-    {
-      "path": "runs/aoe_peaks",
-      "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
-    },
-    {
-      "path": "runs/inspect_*.jpg",
-      "description": "Synthetic-rig frame inspections (event rendering checks)."
-    },
-    {
-      "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
-      "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
-    },
-    {
-      "path": "runs/debug_sync.png / runs/blend_*.png",
-      "description": "IMU-video sync and warp-vs-frame blend debug images."
-    }
-  ],
-  "logs": [
-    {"path": "runs/capture.log", "description": "webcam capture log"},
-    {"path": "runs/screencap*.log", "description": "screen recording experiments"},
-    {"path": "runs/play*.log", "description": "scene playback logs"}
-  ]
+ "project": "cerebellum-style residual-triggered data collection",
+ "description": "MVP of a data-collection layer that stores only what a camera+IMU rig cannot predict (corollary-discharge cancellation + residual triggering), inspired by Perks et al., Nature 2026 (doi:10.1038/s41586-026-10690-6).",
+ "guide": "GUIDE.md",
+ "readme": [
+  "README.md",
+  "README.zh.md"
+ ],
+ "updated": "2026-09-07",
+ "datasets": [
+  {
+   "path": "data/dataset",
+   "type": "synthetic-rig",
+   "description": "Rendered rig: static textured scene + gyro-driven camera rotation + injected blob/bar surprise events. The primary benchmark (train/val splits, frames + imu.csv + events.json + featmaps.npy per sequence).",
+   "size": "3.0G",
+   "producers": [
+    "scripts/make_dataset.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/synthetic",
+   "type": "synthetic-demo",
+   "description": "60-second single-scene demo used by the pixel-pipeline experiment (scripts/run_experiment.py).",
+   "size": "77M",
+   "producers": [
+    "scripts/make_synthetic.py"
+   ]
+  },
+  {
+   "path": "data/webcam_rec",
+   "type": "real-capture",
+   "description": "Webcam field test: real camera, synthetic scene motion, no IMU (sines emulated offline). Used for the webcam readout in README.",
+   "size": "18M",
+   "producers": [
+    "scripts/capture_webcam.py"
+   ]
+  },
+  {
+   "path": "data/aoe_src",
+   "type": "external-raw",
+   "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. 9 segments fetched by scripts/fetch_aoe.py (probe 60 -> greedy scene/verb select -> fetch): aoe_20260214_232847_p000 (kitchen/unboxing) + 8 raw_*_seg_* (bathroom, bedroom, childs-room, dining/kitchen/living, workshop, workspace, shop; 134-301 s each).",
+   "size": "4.1G",
+   "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h",
+   "producers": [
+    "scripts/fetch_aoe.py"
+   ]
+  },
+  {
+   "path": "data/aoe_motion",
+   "type": "prepared-real",
+   "description": "High-motion Open-AoE pair (top of 259-probed pool by trajectory rotation: p95 |yaw| 51.6/31.0 deg/s; bathroom/hallway/laundry + warehouse/workshop), same layout as data/aoe. Frames deleted after evals (regenerate via prep_aoe.py).",
+   "size": "0.5G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/aoe",
+   "type": "prepared-real",
+   "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing.",
+   "size": "2.4G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/aoe_motion_448",
+   "type": "prepared-real",
+   "description": "Same high-motion Open-AoE pair rendered at 448px input (f_map doubled to ~38.3, 38x38 featmaps) for the resolution cross-check. Frames are symlinks into prep_aoe output and are deleted after evals alongside data/aoe_motion frames; featmaps/imu/events kept for re-running quality evals (regenerate frames via prep_aoe.py).",
+   "size": "1.8G",
+   "producers": [
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  }
+ ],
+ "results": [
+  {
+   "path": "runs/resolution_report.md",
+   "producer": "scripts/run_repeat_eval.py",
+   "note": "10x repeat-measurement protocol for the resolution axis (machine-readable numbers in runs/resolution_bench10x.json). Quality metrics re-run once per size and verified EXACT (max diff 0.0) against the recorded sweep; latency bench repeated 10x per size.",
+   "headline": "Quality is bit-exact across re-runs at all three input sizes (deterministic pipeline). Latency 10-run distributions: gyro shift 0.032/0.063/0.089 ms (224/336/448), DIS 3.83+-0.04/4.28+-0.43/4.34+-0.17 ms, backbone fwd ~1.0-1.2 ms (+-30%), full flow step 4.5-5.7 ms."
+  },
+  {
+   "path": "runs/flow_eval_res224.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 224 px input (40 train + 25 val seqs); part of the resolution series, see runs/flow_eval_res336/448.json",
+   "headline": "synthetic rig @224px (f_map 24.25): val calm residual naive 0.221 / gyro 0.130 / flow 0.107; gyro shift 0.032 ms, DIS 3.86 ms per frame."
+  },
+  {
+   "path": "runs/flow_eval_res336.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 336 px (f_map 36.38). backbone_fwd_ms re-measured standalone after fixing bench() to honor --size (bench_note inside the JSON).",
+   "headline": "synthetic rig @336px: val calm residual naive 0.187 / gyro 0.089 / flow 0.069 (-52% gyro gain); gyro shift 0.061 ms, DIS 4.20 ms per frame."
+  },
+  {
+   "path": "runs/flow_eval_res448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 448 px (f_map 48.50). backbone_fwd_ms re-measured standalone (bench_note inside the JSON). At 448 px the gated trigger froze to 0 clips on all 5 checked val seqs; winsorized robust stats fired on all 5 (val seq_000..004, checked in the same session).",
+   "headline": "synthetic rig @448px: val calm residual naive 0.169 / gyro 0.072 / flow 0.052 (-58% gyro gain, monotone in resolution, not saturated); gyro shift 0.087 ms, DIS 4.35 ms per frame; flow/gyro gap narrows 0.82 -> 0.73."
+  },
+  {
+   "path": "runs/flow_eval.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "overwritten on every run; the runs referenced from docs are backed up as separate files: flow_eval_motion.json (real high-motion 224px), flow_eval_motion448.json (same pair at 448px), flow_eval_synth448.json (synthetic 448px), flow_eval_aoe9.json (9 desk clips, rebuilt from log).",
+   "headline": "current content: aoe_motion_448 --n-train 0 --n-val 2 --robust. Calm residual naive 0.0535 / gyro 0.0614 (still hurts, +15%) / flow 0.0684 (flips per-sequence: 0.086 hallway, 0.051 warehouse). The synthetic design rule 'finer features turn the gyro warp positive' does NOT transfer to real high-motion -- unmodeled translation/parallax dominates, not estimator error."
+  },
+  {
+   "path": "runs/flow_eval_aoe9.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "rebuilt from logged per-seq output of the 27ed74d n=9 run (see runs/flow_eval.json note)",
+   "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination; gyro-warp calm residual ~= naive everywhere."
+  },
+  {
+   "path": "runs/downstream_results.json",
+   "producer": "scripts/train_downstream.py",
+   "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
+   "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
+  },
+  {
+   "path": "runs/arbiter_eval.json",
+   "producer": "scripts/run_arbiter_eval.py",
+   "note": "last run: data/aoe_motion --n-val 2 --robust. The n=9 desk-clip run was overwritten and rebuilt from its logged aggregate output as runs/arbiter_eval_aoe9.json.",
+   "headline": "aoe_motion robust: seq_000 130 runs, 14 vetoes, runs-level stored 0.92->0.62 at precision 1.00 (evRec 1.00->0.82); seq_001 0 vetoes; amortized flow 0.58 ms/frame. AoE n=9 desk numbers: 140 runs/seq, stored 0.89->0.72, evRec 1.00->0.94 (runs/arbiter_eval_aoe9.json)."
+  },
+  {
+   "path": "runs/arbiter_eval_aoe9.json",
+   "producer": "scripts/run_arbiter_eval.py",
+   "note": "rebuilt from logged aggregate output of the 27ed74d n=9 run (see runs/arbiter_eval.json note)",
+   "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
+  },
+  {
+   "path": "runs/downstream_clips.json",
+   "producer": "scripts/train_downstream.py",
+   "note": "per-clip selection records for the downstream comparison"
+  },
+  {
+   "path": "runs/raft_eval_data_dataset_val.json",
+   "producer": "scripts/run_raft_eval.py",
+   "note": "RAFT (ECCV 2020, raft-things) plugged into the same warp path as DIS, synthetic val first 5 seqs.",
+   "headline": "calm residual naive 0.2210 / gyro 0.1290 / DIS 0.1056 / RAFT 0.1054 (tie); latency DIS 5.9 ms vs RAFT 134 ms per frame. The flow ceiling is estimator-independent."
+  },
+  {
+   "path": "runs/raft_eval_data_aoe_motion_val.json",
+   "producer": "scripts/run_raft_eval.py",
+   "note": "same, real high-motion pair (data/aoe_motion, robust stats).",
+   "headline": "calm residual naive 0.0801 / gyro 0.0901 / DIS 0.0522 / RAFT 0.0544 (RAFT marginally worse); latency DIS 7.4 ms vs RAFT 138 ms."
+  },
+  {
+   "path": "runs/portable_check.json",
+   "producer": "scripts/run_portable_check.py",
+   "note": "CPU vs Apple Silicon MPS on data/dataset/val/seq_000 (32 frames): feature extraction and downstream gyro rollout compared across devices.",
+   "headline": "feature max rel diff 2e-6, gyro calm residual diff 3.7e-9 (numerically device-portable); backbone fwd 1.76 ms CPU vs 1.06 ms MPS (1.7x)."
+  },
+  {
+   "path": "runs/flow_eval_motion448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "448px resolution cross-check on the real high-motion pair (data/aoe_motion_448: frames symlinked at 448, featmaps re-extracted, f_map doubled to 38.33).",
+   "headline": "calm residual naive 0.0535 / gyro 0.0614 (warp still hurts) / flow 0.0684 (per-seq 0.0861/0.0507). Design rule from the synthetic sweep does not transfer to real data."
+  },
+  {
+   "path": "runs/flow_eval_synth448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "backup of the flow_eval.json state before the 448px real cross (synthetic rig at 448px input).",
+   "headline": "synthetic 448px quality: train naive 0.0750/gyro 0.0453/flow 0.0336, val 0.1694/0.0717/0.0523 (gyro gain -58%, the top of the resolution sweep)."
+  }
+ ],
+ "figures": [
+  {
+   "path": "runs/aoe_peaks",
+   "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
+  },
+  {
+   "path": "runs/inspect_*.jpg",
+   "description": "Synthetic-rig frame inspections (event rendering checks)."
+  },
+  {
+   "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
+   "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
+  },
+  {
+   "path": "runs/debug_sync.png / runs/blend_*.png",
+   "description": "IMU-video sync and warp-vs-frame blend debug images."
+  }
+ ],
+ "logs": [
+  {
+   "path": "runs/capture.log",
+   "description": "webcam capture log"
+  },
+  {
+   "path": "runs/screencap*.log",
+   "description": "screen recording experiments"
+  },
+  {
+   "path": "runs/play*.log",
+   "description": "scene playback logs"
+  }
+ ]
 }

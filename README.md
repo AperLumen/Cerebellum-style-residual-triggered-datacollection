@@ -312,6 +312,31 @@ gyro warp              0.079        0.129           0.113    0.30
 DIS flow warp          0.070        0.103           0.192    0.33
 ```
 
+**Stronger flow estimators do not beat DIS here.** RAFT (Teed & Deng,
+ECCV 2020, raft-things weights) was plugged into the same warp path
+(`scripts/run_raft_eval.py`), answering "is the flow ceiling just an
+artifact of DIS being weak?":
+
+```
+                    calm residual (mean |err|)      ms/frame
+                    synthetic val   real high-motion (224px, robust)
+naive                  0.221             0.080                --
+gyro warp              0.129             0.090              0.033
+DIS flow warp          0.106             0.052          5.9 / 7.4
+RAFT flow warp         0.105             0.054        134 / 138
+```
+
+(5 synthetic val sequences; 2 real high-motion sequences.) RAFT ties DIS
+on synthetic (0.1054 vs 0.1056) and is marginally worse on real (0.0544
+vs 0.0522) while being ~20x slower. The flow ceiling is an
+estimator-independent property of the task, and the gyro-vs-flow residual
+gap cannot be closed by swapping in a learned flow model.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_raft_eval.py data/dataset --split val --n-seq 5
+PYTHONPATH=. .venv/bin/python scripts/run_raft_eval.py data/aoe_motion --split val --n-seq 2 --robust
+```
+
 Median per-frame latency on this machine (320x240 frames, 24x28x28 maps):
 
 ```
@@ -343,10 +368,20 @@ Takeaways:
    turns the IMU into a corollary discharge; flow is a per-frame computer
    vision computation that must run before the compensation it feeds. For
    a rig whose whole point is *cheap always-on* surprisingness, the IMU is
-   the right layer — flow is the quality ceiling to compare against, and
+   the right layer — flow is the quality ceiling to compare against (now
+   confirmed estimator-independent with RAFT), and
    the residual-quality gap (11-20%) is the honest price of the 100x
    cost ratio. A sub-pixel gyro shift and a better f_map calibration would
    close part of that gap.
+
+**Cross-platform portability** (`scripts/run_portable_check.py`,
+`runs/portable_check.json`): the only device-dependent stage is the frozen
+backbone forward. On the same frames, CPU vs MPS features agree to a max
+relative diff of 2e-6 and the downstream gyro calm residual differs by
+3.7e-9 — the cancellation path is numerically device-portable. Latency:
+backbone 1.76 ms on CPU vs 1.06 ms on MPS (1.7x), so the pipeline stays
+well under one 30 fps frame budget on CPU. The remaining unmeasured
+boundary is phone-class hardware (no laptop MPS, slower cores).
 
 Reproduce:
 
@@ -548,6 +583,24 @@ corpus even the top-decile rotation stays ~0.5 map px/frame at 28x28, so
 the gyro warp's quality window is narrow at this resolution — its case
 is cost, and the flow arbiter is the paid upgrade when the cheap model
 breaks. (n=2; the axis-calibration caveat above applies.)
+
+**Resolution cross-check at 448 px** (same pair, feature map doubled,
+38x38; `data/aoe_motion_448`, `runs/flow_eval_motion448.json`): the
+design rule "finer features turn the gyro warp positive" — which holds
+monotonically on synthetic (gyro gain -41/-52/-58% at 224/336/448) —
+does **not** transfer to real high-motion. Gyro is still worse than naive
+(0.0535 -> 0.0614, +15%), and DIS flow flips per sequence (0.086 on the
+hallway clip, 0.051 on the warehouse clip; mean 0.068, worse than naive
+on one of two). On real data the damage is dominated by what the
+rotation-only model cannot see — translation/parallax and rolling-shutter
+distortion — and more pixels make that *more* visible, not less.
+Resolution fixes estimator error; it cannot fix model-class error. The
+next model gap to close is translation, not resolution:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_448 \
+  --n-train 0 --n-val 2 --robust
+```
 
 ```bash
 # pick + download segments (probe -> select -> fetch, each cached)
