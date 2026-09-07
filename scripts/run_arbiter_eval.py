@@ -27,9 +27,9 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from run_flow_eval import load_seq, clip_stats  # noqa: E402
+from run_flow_eval import cancel_cfg, load_seq, clip_stats  # noqa: E402
 
-from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
+from cerebellum_cancel.featmap_cancel import (FeatureMapCancel,
                                                expected_shift, maxcell_score,
                                                shift_map)
 from cerebellum_cancel.flow_cancel import (FlowWarpConfig, dis_flow_warp,
@@ -39,11 +39,11 @@ DIS_MS = 3.813      # measured in run_flow_eval.py bench (this machine)
 ONSET_Z = 6.0       # match AdaptiveTrigger's default onset
 
 
-def gyro_trace(fm, gyro, fps=30.0, fmap_scale=1.0):
+def gyro_trace(fm, gyro, meta, fmap_scale=1.0):
     """Gyro rollout; returns (z trace, sd trace after each step).
     fmap_scale != 1 simulates focal-length miscalibration (the structured
     ego-motion modeling error the arbiter exists to catch)."""
-    cfg = CancelConfig(fps=fps)
+    cfg = cancel_cfg(meta)
     cfg.f_map *= fmap_scale
     canc = FeatureMapCancel(cfg)
     zs, sds = [], []
@@ -69,7 +69,7 @@ def candidate_runs(z, onset=ONSET_Z, gap=2):
     return runs
 
 
-def arbitrate(fm, grays, gyro, fps, z, runs, explain_ratio):
+def arbitrate(fm, grays, gyro, meta, z, runs, explain_ratio):
     """Veto candidate runs whose gyro residual flow can explain.
 
     Composition per candidate peak frame t: the gyro shift warps BOTH the
@@ -86,7 +86,7 @@ def arbitrate(fm, grays, gyro, fps, z, runs, explain_ratio):
     n_calls, vetoed = 0, []
     dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     fcfg = FlowWarpConfig()
-    cfg = CancelConfig(fps=fps)
+    cfg = cancel_cfg(meta)
     for a, b in runs:
         t = a + int(np.argmax(fz[a:b + 1]))
         if t < 1:
@@ -154,17 +154,19 @@ def main():
     results = {}
     for split, n_seq in [("train", args.n_train), ("val", args.n_val)]:
         seqs = sorted(glob.glob(f"{args.dataset}/{split}/seq_*"))[:n_seq]
+        if not seqs:
+            continue
         agg = {"gyro_runs": [], "cascade_runs": [],
                "gyro_clips": [], "cascade_clips": []}
         n_calls_total = 0
         for seq in seqs:
             fm, frames, gyro, meta, fps, labels, n = load_seq(seq)
             events = [tuple(e) for e in meta["events"]]
-            z, _ = gyro_trace(fm, gyro, fps, args.fmap_scale)
+            z, _ = gyro_trace(fm, gyro, meta, args.fmap_scale)
             score = maxcell_score(z)          # published readout: sum_c z^2,
                                               # max over interior cells
             runs = candidate_runs(np.abs(z).max(axis=(1, 2, 3)))
-            z2, n_calls, vetoed = arbitrate(fm, frames, gyro, fps, z,
+            z2, n_calls, vetoed = arbitrate(fm, frames, gyro, meta, z,
                                             runs, args.explain_ratio)
             n_calls_total += n_calls
             vset = {(a, b) for a, b, _ in vetoed}

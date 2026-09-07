@@ -53,6 +53,15 @@ def load_seq(seq):
     return fm[:n], frames[:n], gyro[:n], meta, fps, labels, n
 
 
+def cancel_cfg(meta: dict) -> "CancelConfig":
+    """CancelConfig honoring a per-sequence f_map (real cameras: fx differs
+    from the synthetic rig's default)."""
+    cfg = CancelConfig(fps=float(meta.get("fps", 30.0)))
+    if "f_map" in meta:
+        cfg.f_map = float(meta["f_map"])
+    return cfg
+
+
 def raw_calm_residual(canc, z, thr=4.0):
     """Mean |err| over calm frames, reconstructed from z and running sd."""
     calm = []
@@ -181,14 +190,18 @@ def main():
 
     results = {"quality": {"train": {}, "val": {}}, "clips": {}}
     for split, n_seq in [("train", args.n_train), ("val", args.n_val)]:
+        split_seqs = seq_dirs(args.dataset, split)[:n_seq]
+        if not split_seqs:
+            continue
         agg = {}
-        for seq in seq_dirs(args.dataset, split)[:n_seq]:
+        for seq in split_seqs:
             fm, frames, gyro, meta, fps, labels, n = load_seq(seq)
             events = [tuple(e) for e in meta["events"]]
             rows = {}
-            for name, canc in [("naive", FeatureMapCancel(
-                    CancelConfig(use_warp=False))),
-                               ("gyro", FeatureMapCancel(CancelConfig())),
+            cfg_naive = cancel_cfg(meta)
+            cfg_naive.use_warp = False
+            for name, canc in [("naive", FeatureMapCancel(cfg_naive)),
+                               ("gyro", FeatureMapCancel(cancel_cfg(meta))),
                                ("flow", FlowWarpCancel(FlowWarpConfig()))]:
                 if name == "flow":
                     z, _ = rollout_flow(canc, fm, frames)
@@ -213,7 +226,8 @@ def main():
             for k, v in agg.items()}
 
     print("\nbenchmarking (median per-frame latency) ...")
-    results["bench"] = bench(seq_dirs(args.dataset, "train")[0])
+    bench_seqs = seq_dirs(args.dataset, "train") or seq_dirs(args.dataset, "val")
+    results["bench"] = bench(bench_seqs[0])
     for k, v in results["bench"].items():
         print(f"  {k:<18} {v:8.3f} ms/frame")
 

@@ -406,6 +406,62 @@ the cascade evaluation sidesteps by comparing at fixed-threshold run level.
 PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 ```
 
+## Real egocentric validation (Open-AoE)
+
+The synthetic rig is pure global yaw/pitch, so a first real-world check
+uses [Open-AoE](https://github.com/ant-research/Open-AoE) (inclusionAI/
+OpenAoE-2000h on HF): ~700h of consumer-phone egocentric video with a
+visual-SLAM camera trajectory and time-aligned atomic-action labels. One
+segment (`aoe_20260214_232847_p000`, 181 s, 5430 frames, grasp/peel/press/
+tear/...) was prepared by `scripts/prep_aoe.py`, which differentiates
+`cam_c2w` into the gyro-like signal the pipeline expects (per-axis signs
+auto-calibrated against DIS flow, r = 0.53 / 0.60) and writes the standard
+sequence layout, with the real `f_map = 11.49` (fx 787.8, not the
+synthetic rig's 24.25).
+
+Measured on this segment — three findings that the synthetic rig could not
+produce:
+
+1. **Real ego-motion is sub-pixel at 28x28.** Median content shift is
+   0.013 map px (p95 0.05, max 0.16), so the gyro warp is physically
+   neutral here: calm residual naive 0.0323 vs gyro 0.0328. The
+   corollary-discharge warp only earns its keep at finer resolution,
+   deeper features, or walking-scale motion — not at a desk-egocentric
+   clip at 224 px input.
+2. **The equilibrium-rate gate freezes on real data.** 96.4% of frames
+   have surprise > 4, so after warmup the running stats update on only
+   3.6% of frames and the sd ratchets down (0.92 -> 0.17); z saturates
+   (median max|z| = 13) and the two readouts degenerate in opposite
+   directions: fixed-threshold runs cover 92% of all frames, while
+   `AdaptiveTrigger`'s relative normalization fires **zero** clips. The
+   calm-gate assumption (surprise is sparse) holds for pop-in synthetic
+   events and fails for real video. With always-updating stats the
+   trigger fires again (7 clips, evRec 0.57), so this is fixable — a
+   robust-stats redesign (median/MAD, always-update) is the next step.
+3. **Residual spikes are real but misaligned with action labels.** The
+   top residual frames are fast hand/object motion with motion blur
+   (`runs/aoe_peaks/`), yet the score is *anti*-correlated with the
+   annotation's action intervals (AUC 0.47): atomic actions are extended
+   intervals with varying motion energy, while the residual indexes
+   motion transients. Frame-level event-recall against human action
+   labels is therefore the wrong metric on real data; for the
+   residual-triggered *storage-selection* architecture the meaningful
+   metric is downstream value of the selected clips (as in the
+   downstream section above), not label alignment.
+
+The flow arbiter had nothing to veto on this segment (0/47 runs): with
+ego-motion ~0 and spikes caused by real content change, there is no
+modeling error for flow to explain — consistent with the synthetic
+findings, from the opposite direction.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe/val/seq_000
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1
+```
+
 ## Honest limitations
 
 - **Screen recording is a dead end for this method (measured, not assumed).**

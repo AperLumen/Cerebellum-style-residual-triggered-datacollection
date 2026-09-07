@@ -244,6 +244,26 @@ val   cascade     0.498      0.155      1.00       23.6         0.150
 PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 ```
 
+## 真实第一人称验证（Open-AoE）
+
+合成 rig 是纯全局 yaw/pitch，所以第一次真实世界检验使用 [Open-AoE](https://github.com/ant-research/Open-AoE)（HF 上的 inclusionAI/OpenAoE-2000h）：~700 小时消费级手机第一视角视频，带视觉 SLAM 相机轨迹和时间对齐的原子动作标注。选取一个 segment（`aoe_20260214_232847_p000`，181 秒，5430 帧，grasp/peel/press/tear/...），用 `scripts/prep_aoe.py` 准备：对 `cam_c2w` 差分得到 pipeline 期望的 gyro 式信号（逐轴符号对照 DIS 流自标定，r = 0.53 / 0.60），写出标准序列布局，并使用真实 `f_map = 11.49`（fx 787.8，而非合成 rig 的 24.25）。
+
+在此 segment 上实测——三条合成 rig 给不出的发现：
+
+1. **真实自运动在 28×28 上是亚像素的**。内容位移中位数 0.013 特征图像素（p95 0.05，max 0.16），所以 gyro warp 在物理上是中性的：平静残差 naive 0.0323 vs gyro 0.0328。伴随放电 warp 只有在更细分辨率、更深层特征、或行走级运动下才物有所值——桌面第一视角 + 224 px 输入的场景里用不上。
+2. **平衡门在真实数据上会冻结**。96.4% 的帧 surprise > 4，warmup 之后运行统计只在 3.6% 的帧上更新，sd 单向衰减（0.92 → 0.17）；z 饱和（max|z| 中位数 = 13），两种读数朝相反方向退化：固定阈值 run 覆盖全部帧的 92%，而 `AdaptiveTrigger` 的相对归一化**一次 clip 都不触发**。平静门假设（surprise 是稀疏的）对 pop-in 式合成事件成立，对真实视频不成立。改成总是更新统计后触发器恢复工作（7 clips，evRec 0.57），所以可修——下一步是稳健统计重构（median/MAD + always-update）。
+3. **残差尖峰是真实的，但与动作标注不对齐**。残差最高的帧是快速手/物体运动+运动模糊（`runs/aoe_peaks/`），但分数与标注的动作区间*反*相关（AUC 0.47）：原子动作是运动能量起伏的长区间，而残差索引的是运动瞬变。因此帧级 event-recall 对照人类动作标注在真实数据上是错误指标；对残差触发*存储选择*架构来说，有意义的指标是被选片段的下游价值（见上节），而不是标注对齐。
+
+光流仲裁在此 segment 上同样无可否决（0/47 run）：自运动 ≈ 0 且尖峰由真实内容变化引起，没有建模误差可供光流解释——与合成发现方向相反，结论一致。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe/val/seq_000
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-val 1
+PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 1
+```
+
 ## 诚实的局限性
 
 - **屏幕录制是此方法的死路（实测，非推测）**。对场景做过一次 `screencapture -v` 录制的端到端测试：静态帧很干净（残差 4e-5），但运动下即使*oracle*补偿器（完美知道真实平移）也留下 ~0.066 的残差，且最佳的整数对齐帧对差异为 1.16/255，而原始帧是 0.009/255——约 130 倍的下限。ProMotion 合成器帧混合 / HEVC B 帧平滑破坏了此方法需要的信号（帧间锐利的时间采样）。结论：在真实相机（iPhone / webcam）上验证，它们采样的是锐利瞬间，而不是屏幕录制。
