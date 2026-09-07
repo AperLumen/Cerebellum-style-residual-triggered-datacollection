@@ -185,7 +185,7 @@ def cmd_select(args) -> None:
 
 
 def cmd_fetch(args) -> None:
-    selected = json.load(open(f"{INDEX}/selected.json"))
+    selected = json.load(open(args.selected))
     print(f"fetching {len(selected)} segments -> {SRC}/")
     for s in selected:
         seg = s["seg"]
@@ -209,6 +209,10 @@ def main():
                         ">= this (deg/s) — for the walking-scale regime")
     p.set_defaults(fn=cmd_select)
     p = sub.add_parser("fetch", help="download selected videos")
+    p.add_argument("--selected", default=f"{INDEX}/selected.json",
+                    help="selector output json (default: the desk-pool "
+                         "selection; select_event_segments.py writes "
+                         "selected_event.json)")
     p.set_defaults(fn=cmd_fetch)
     args = ap.parse_args()
     args.fn(args)

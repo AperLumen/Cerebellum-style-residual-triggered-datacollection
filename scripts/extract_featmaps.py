@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import os
 import warnings
 
@@ -52,9 +51,11 @@ def main():
         out_path = f"{s}/featmaps.npy"
         if os.path.exists(out_path):
             continue
-        meta = json.load(open(f"{s}/events.json"))
-        n = int(meta["seconds"] * meta["fps"])
         frames = sorted(glob.glob(f"{s}/frames/*.png"))
+        # the frame count on disk is authoritative: float seconds*fps can
+        # truncate by 1 (e.g. 980/30*30 -> 979.99) and slice batches to
+        # frames[n:] would overflow fmaps
+        n = len(frames)
         fmaps = np.zeros((n, c, h, w), dtype=np.float16)
         for i in range(0, n, args.batch):
             batch = frames[i:i + args.batch]

@@ -140,6 +140,12 @@ def main():
     ap.add_argument("--frame-size", type=int, nargs=2, default=[640, 360])
     ap.add_argument("--max-frames", type=int, default=0,
                     help="0 = all frames shared by video and trajectory")
+    ap.add_argument("--event-verbs", default="",
+                    help="comma list (e.g. 'drop,throw,toss,break'): restrict "
+                         "events.json intervals to segments containing these "
+                         "verbs — for the sparse physical-event downstream "
+                         "task; default keeps every active-manipulation "
+                         "interval (desk-pool behaviour)")
     args = ap.parse_args()
 
     video = args.video
@@ -202,21 +208,33 @@ def main():
                     f"{vel[t][2]:.6f}\n")
 
     ann = json.load(open(os.path.join(args.src, "ego_action_annotation.json")))
-    events = []
-    for seg in ann:
-        acts = seg.get("atomic_action") or []
-        if any(a.get("verb") not in PASSIVE_VERBS
-               and a.get("hand") != "none" for a in acts):
-            events.append([float(seg["start_ts"]), float(seg["end_ts"])])
+    if args.event_verbs:
+        want = {v.strip() for v in args.event_verbs.split(",") if v.strip()}
+        events = []
+        for seg in ann:
+            acts = seg.get("atomic_action") or []
+            if any(a.get("verb") in want for a in acts):
+                events.append([float(seg["start_ts"]), float(seg["end_ts"])])
+    else:
+        events = []
+        for seg in ann:
+            acts = seg.get("atomic_action") or []
+            if any(a.get("verb") not in PASSIVE_VERBS
+                   and a.get("hand") != "none" for a in acts):
+                events.append([float(seg["start_ts"]), float(seg["end_ts"])])
     # featmap sees the backbone input (224 = full sensor width scaled),
     # not the stored frame: f_map = fx * map_w / sensor_w
     f_map = fx * MAP_W / 1920.0     # 224-input px / 8 stride -> map px
+    note = ("gyro + translation derived from SLAM camera trajectory; "
+            "trans_scale = per-segment constant-depth 1/Z calibration "
+            "against DIS flow (translation columns are sign-folded)")
+    if args.event_verbs:
+        note += "; events = event-verbs intervals"
     meta = {"fps": fps, "seconds": n / fps, "events": events,
             "f_map": f_map, "source": os.path.basename(args.src.rstrip("/")),
             "trans_scale": trans_scale,
-            "note": "gyro + translation derived from SLAM camera trajectory; "
-                    "trans_scale = per-segment constant-depth 1/Z calibration "
-                    "against DIS flow (translation columns are sign-folded)"}
+            "event_verbs": args.event_verbs or None,
+            "note": note}
     with open(f"{args.out}/events.json", "w") as f:
         json.dump(meta, f, indent=2)
     print(f"events: {len(events)} active intervals; f_map={f_map:.2f} "
