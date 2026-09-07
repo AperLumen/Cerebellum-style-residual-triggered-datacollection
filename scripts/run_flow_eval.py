@@ -108,7 +108,7 @@ def clip_stats(score, fps, n, events):
             "event_frame_cover": hit / max(int(ev_time.sum()), 1)}
 
 
-def bench(seq):
+def bench(seq, size: int = 224):
     """Median per-frame latency of each stage (ms), measured on one seq."""
     fm, frames, gyro, meta, fps, labels, n = load_seq(seq)
     rep = 3
@@ -152,7 +152,7 @@ def bench(seq):
             prev = gray
     pixel_ms = float(np.median(ts))
 
-    # 4. frozen backbone forward (features[:3], 224x224, batch 1)
+    # 4. frozen backbone forward (features[:3], `size`x`size`, batch 1)
     import torch
     import torchvision
     import torchvision.transforms as T
@@ -160,7 +160,7 @@ def bench(seq):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     model = torchvision.models.mobilenet_v3_small(
         weights="DEFAULT").features[:3].to(device).eval()
-    tf = T.Compose([T.Resize((224, 224)), T.ToTensor(),
+    tf = T.Compose([T.Resize((size, size)), T.ToTensor(),
                     T.Normalize([0.485, 0.456, 0.406],
                                 [0.229, 0.224, 0.225])])
     with torch.no_grad():
@@ -204,6 +204,9 @@ def main():
     ap.add_argument("--n-val", type=int, default=5)
     ap.add_argument("--robust", action="store_true",
                     help="median/MAD always-update stats (for real video)")
+    ap.add_argument("--size", type=int, default=224,
+                    help="backbone input edge the featmaps were extracted "
+                         "with (bench stage only; dataset default is 224)")
     args = ap.parse_args()
 
     results = {"quality": {"train": {}, "val": {}}, "clips": {}}
@@ -246,7 +249,7 @@ def main():
 
     print("\nbenchmarking (median per-frame latency) ...")
     bench_seqs = seq_dirs(args.dataset, "train") or seq_dirs(args.dataset, "val")
-    results["bench"] = bench(bench_seqs[0])
+    results["bench"] = bench(bench_seqs[0], size=args.size)
     for k, v in results["bench"].items():
         print(f"  {k:<18} {v:8.3f} ms/frame")
 

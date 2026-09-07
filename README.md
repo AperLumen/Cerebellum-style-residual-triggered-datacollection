@@ -354,6 +354,62 @@ Reproduce:
 PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset
 ```
 
+## Resolution: the knob that decides whether the gyro warp pays
+
+The gyro warp can only remove motion the feature map can *see*. The same
+rotation produces a content shift of `f_map * tan(omega/fps)` map px, and
+`f_map` scales with backbone input size. Re-running the benchmark at three
+input sizes (same 40 train + 25 val sequences, MobileNetV3 features[:3],
+stride 8; `f_map` 24.25 at 224 px is the rig default) isolates resolution
+as the variable:
+
+```
+input   map      f_map   calm residual (val)   gyro gain   gyro shift   DIS flow
+        size           naive   gyro   flow    vs naive    ms/frame     ms/frame
+224     28x28    24.25   0.221   0.130  0.107   -41%        0.032        3.86
+336     42x42    36.38   0.187   0.089  0.069   -52%        0.061        4.20
+448     56x56    48.50   0.169   0.072  0.052   -58%        0.087        4.35
+```
+
+(backbone forward is ~0.6 ms/frame at every size on MPS — shallow stride-8
+layers are memory-bound; the protocol cost of resolution is in storage and
+bandwidth, not compute. Same-session re-measurement, `runs/flow_eval_res*.json`.)
+
+The gain is monotone and has not saturated: every 1.5x input size removes
+another ~6-10 points of calm residual that the naive predictor cannot
+touch. The flow gap narrows with resolution too (flow/gyro 0.82 -> 0.73):
+the gyro warp's main error source — sub-pixel quantization of the shift —
+shrinks as the map gets finer. This also retroactively explains both real
+regimes: desk-egocentric Open-AoE at 224 px is f_map ~11-19 with rotation
+under ~5 deg/s (shift < 0.05 map px — nothing to remove, warp neutral),
+while the high-motion pair at p95 |yaw| 31-52 deg/s reaches ~0.5-0.7 map
+px — inside the window where model error (uncompensated roll, calibration)
+starts to *add* residual instead of removing it.
+
+Design rule for the protocol layer: **corollary-discharge cancellation is
+a resolution-gated primitive** — pair it with fine-grained features
+(DINOv2 patch tokens, or stride-8 maps at >= 448 px input) and it removes
+half the predictable residual for ~0.09 ms/frame; at coarse maps it is
+free but neutral. The same variable decides whether the *trigger* keeps
+working: at 448 px the gated self-normalizing trigger froze to zero clips
+on all 5 synthetic val sequences (baseline surprise grows and
+heavy-tails with resolution), while winsorized robust stats fired on all
+5 — the real-video gate failure, reproduced on synthetic data.
+
+Reproduce:
+
+```bash
+# featmaps at other input sizes; f_map scales linearly (24.25 * size/224)
+for S in 336 448; do
+  .venv/bin/python scripts/extract_featmaps.py data/dataset_$S --size $S
+  PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset_$S \
+      --n-train 40 --n-val 25 --size $S
+done
+```
+(The `data/dataset_$S` dirs hold symlinks to the frames, `imu.csv` copies
+and `events.json` with the scaled `f_map`; delete/rebuild at will — the
+featmaps re-extract in minutes.)
+
 ## Flow-as-arbiter cascade
 
 A middle architecture between "gyro only" and "flow every frame": the gyro

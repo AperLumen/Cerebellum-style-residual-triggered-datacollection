@@ -218,6 +218,36 @@ DIS 光流 (320x240)         3.813
 PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset
 ```
 
+## 分辨率：决定 gyro warp 值不值的旋钮
+
+gyro warp 只能移除特征图*看得见*的运动。同样的旋转产生的内容位移是 `f_map * tan(omega/fps)` 个特征图像素，而 `f_map` 随 backbone 输入尺寸线性缩放。用三个输入尺寸重跑同一基准（同样的 40 训练 + 25 验证序列，MobileNetV3 features[:3]，stride 8；224 px 时 f_map 24.25 是 rig 默认值），把分辨率单独作为变量：
+
+```
+输入    特征图    f_map   平静帧残差（验证集）  gyro 收益   gyro shift   DIS 光流
+        尺寸             naive   gyro   flow   vs naive  ms/帧        ms/帧
+224     28x28    24.25   0.221   0.130  0.107  -41%       0.032        3.86
+336     42x42    36.38   0.187   0.089  0.069  -52%       0.061        4.20
+448     56x56    48.50   0.169   0.072  0.052  -58%       0.087        4.35
+```
+
+（backbone 前向在 MPS 上各尺寸都 ~0.6 ms/帧——浅层 stride-8 是访存瓶颈；分辨率的协议成本在存储和带宽，不在算力。同一会话重测，`runs/flow_eval_res*.json`。）
+
+收益单调且未饱和：每提高 1.5 倍输入尺寸，就多消掉 6-10 个百分点的 naive 预测器动不了的平静残差。与光流的差距也随分辨率收窄（flow/gyro 0.82 → 0.73）：gyro warp 的主要误差源——位移的亚像素量化——随特征图变精细而缩小。这也反向解释了真实数据的两个 regime：桌面级 Open-AoE 在 224 px 下 f_map ~11-19、旋转 < ~5°/s（位移 < 0.05 特征图像素——没东西可消，warp 中性）；而 p95 |yaw| 31-52°/s 的高运动对在 ~0.5-0.7 特征图像素——进入了模型误差（roll 未建模、标定）开始*增加*残差而非消减的窗口。
+
+协议层设计规则：**伴随放电取消是一个被分辨率门控的原语**——配细粒度特征（DINOv2 patch token，或 ≥448 px 输入的 stride-8 特征图），它用 ~0.09 ms/帧消掉一半可预测残差；在粗特征图上它免费但中性。同一个变量也决定*触发器*是否工作：448 px 下门控自归一化触发器在全部 5 条合成验证序列上冻到 0 clips（基线 surprise 随分辨率增长并重尾化），而 winsorized 稳健统计在 5 条上全部触发——真实视频的门失效，在合成数据上复现了。
+
+复现：
+
+```bash
+# 其它输入尺寸的 featmaps；f_map 线性缩放（24.25 * size/224）
+for S in 336 448; do
+  .venv/bin/python scripts/extract_featmaps.py data/dataset_$S --size $S
+  PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset_$S \
+      --n-train 40 --n-val 25 --size $S
+done
+```
+（`data/dataset_$S` 目录里是帧的符号链接、`imu.csv` 副本和缩放过 `f_map` 的 `events.json`；可随时删除重建——featmaps 几分钟就能重提。）
+
 ## 光流仲裁级联
 
 介于"只用 gyro"和"每帧跑光流"之间的中间架构：gyro warp 常开；DIS 光流**只在触发候选帧上**被调用，作为仲裁者否决它能解释的候选。每个候选 run 峰值帧的组成方式（`scripts/run_arbiter_eval.py`）：gyro shift 同时预校正灰度帧对（这样 DIS 只需搜索 gyro 模型预测漏掉的小残差——不做预校正时 DIS 在大旋转下跟丢，而触发恰恰在那里开火）和 F_{t-1}；然后 DIS 沿残差流精化预测。当光流精化后的残差内部能量 < gyro 残差的 `explain_ratio`（0.5）时否决该 run——即该残差是自运动建模误差，不是 surprise。

@@ -51,6 +51,24 @@
   ],
   "results": [
     {
+      "path": "runs/flow_eval_res224.json",
+      "producer": "scripts/run_flow_eval.py",
+      "note": "resolution-axis run at 224 px input (40 train + 25 val seqs); part of the resolution series, see runs/flow_eval_res336/448.json",
+      "headline": "synthetic rig @224px (f_map 24.25): val calm residual naive 0.221 / gyro 0.130 / flow 0.107; gyro shift 0.032 ms, DIS 3.86 ms per frame."
+    },
+    {
+      "path": "runs/flow_eval_res336.json",
+      "producer": "scripts/run_flow_eval.py",
+      "note": "resolution-axis run at 336 px (f_map 36.38). backbone_fwd_ms re-measured standalone after fixing bench() to honor --size (bench_note inside the JSON).",
+      "headline": "synthetic rig @336px: val calm residual naive 0.187 / gyro 0.089 / flow 0.069 (-52% gyro gain); gyro shift 0.061 ms, DIS 4.20 ms per frame."
+    },
+    {
+      "path": "runs/flow_eval_res448.json",
+      "producer": "scripts/run_flow_eval.py",
+      "note": "resolution-axis run at 448 px (f_map 48.50). backbone_fwd_ms re-measured standalone (bench_note inside the JSON). At 448 px the gated trigger froze to 0 clips on all 5 checked val seqs; winsorized robust stats fired on all 5 (val seq_000..004, checked in the same session).",
+      "headline": "synthetic rig @448px: val calm residual naive 0.169 / gyro 0.072 / flow 0.052 (-58% gyro gain, monotone in resolution, not saturated); gyro shift 0.087 ms, DIS 4.35 ms per frame; flow/gyro gap narrows 0.82 -> 0.73."
+    },
+    {
       "path": "runs/flow_eval.json",
       "producer": "scripts/run_flow_eval.py",
       "note": "last run: data/aoe_motion --n-val 2 --robust (high-motion pair). The n=9 desk-clip run was overwritten and rebuilt from its logged output as runs/flow_eval_aoe9.json (aggregate fields exact; clip counts/event_frame_cover not printed in the log).",
