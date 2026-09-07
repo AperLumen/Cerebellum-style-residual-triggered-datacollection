@@ -37,8 +37,8 @@
     {
       "path": "data/aoe",
       "type": "prepared-real",
-      "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total.",
-      "size": "24G",
+      "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing.",
+      "size": "2.4G",
       "producers": ["scripts/fetch_aoe.py", "scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
     }
   ],

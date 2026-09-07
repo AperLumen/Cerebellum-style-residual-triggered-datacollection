@@ -52,8 +52,12 @@ def load_seq(seq):
     fps = float(meta.get("fps", 30.0))
     fm = np.load(f"{seq}/featmaps.npy").astype(np.float32)
     n = min(len(fm), int(meta.get("seconds", 20) * fps))
-    frames = [read_bgr(p) for p in
-              sorted(glob.glob(f"{seq}/frames/*.png"))[:n]]
+    paths = sorted(glob.glob(f"{seq}/frames/*.png"))[:n]
+    if not paths:
+        raise IOError(f"{seq}/frames is empty — the prepared AoE frames are "
+                      "not kept on disk (disk budget); re-run "
+                      f"scripts/prep_aoe.py on the source segment first")
+    frames = [read_bgr(p) for p in paths]
     gyro = np.array([g.gyro for g in load_imu_csv(f"{seq}/imu.csv")],
                     dtype=np.float32)
     n = min(n, len(frames), len(gyro))
