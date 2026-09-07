@@ -1,0 +1,92 @@
+{
+  "project": "cerebellum-style residual-triggered data collection",
+  "description": "MVP of a data-collection layer that stores only what a camera+IMU rig cannot predict (corollary-discharge cancellation + residual triggering), inspired by Perks et al., Nature 2026 (doi:10.1038/s41586-026-10690-6).",
+  "guide": "GUIDE.md",
+  "readme": ["README.md", "README.zh.md"],
+  "updated": "2026-09-07",
+  "datasets": [
+    {
+      "path": "data/dataset",
+      "type": "synthetic-rig",
+      "description": "Rendered rig: static textured scene + gyro-driven camera rotation + injected blob/bar surprise events. The primary benchmark (train/val splits, frames + imu.csv + events.json + featmaps.npy per sequence).",
+      "size": "3.0G",
+      "producers": ["scripts/make_dataset.py", "scripts/extract_featmaps.py"]
+    },
+    {
+      "path": "data/synthetic",
+      "type": "synthetic-demo",
+      "description": "60-second single-scene demo used by the pixel-pipeline experiment (scripts/run_experiment.py).",
+      "size": "77M",
+      "producers": ["scripts/make_synthetic.py"]
+    },
+    {
+      "path": "data/webcam_rec",
+      "type": "real-capture",
+      "description": "Webcam field test: real camera, synthetic scene motion, no IMU (sines emulated offline). Used for the webcam readout in README.",
+      "size": "18M",
+      "producers": ["scripts/capture_webcam.py"]
+    },
+    {
+      "path": "data/aoe_src",
+      "type": "external-raw",
+      "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. Segment: aoe_20260214_232847_p000 (181 s egocentric unboxing).",
+      "size": "354M",
+      "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h"
+    },
+    {
+      "path": "data/aoe",
+      "type": "prepared-real",
+      "description": "Open-AoE segment converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), real f_map=11.49, events = active-manipulation intervals.",
+      "size": "2.2G",
+      "producers": ["scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
+    }
+  ],
+  "results": [
+    {
+      "path": "runs/flow_eval.json",
+      "producer": "scripts/run_flow_eval.py",
+      "note": "last run: data/aoe --robust (Open-AoE, winsorized stats). Earlier synthetic-rig numbers are in the README tables and are overwritten by the most recent run.",
+      "headline": "AoE robust: gyro stored=0.099 evRec=0.79; gated stats (naive/flow) fire zero clips; calm residual naive 0.0559 vs gyro 0.0563 (ego-motion sub-pixel at 28x28). Synthetic rig (README): calm residual train 0.093/0.079/0.070 (naive/gyro/flow), val-3x 0.221/0.129/0.103; latency gyro 0.032ms, pixel core 0.171ms, backbone 0.827ms, DIS 3.813ms, flow step 4.456ms per frame."
+    },
+    {
+      "path": "runs/downstream_results.json",
+      "producer": "scripts/train_downstream.py",
+      "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
+      "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
+    },
+    {
+      "path": "runs/arbiter_eval.json",
+      "producer": "scripts/run_arbiter_eval.py",
+      "note": "last run: data/aoe --robust. Synthetic-rig run: 6/118 val runs vetoed, stored 0.520->0.498, precision 0.146->0.155, evRec 1.0, amortized ~0.15 ms/frame.",
+      "headline": "AoE robust: 114 candidate runs, 1 veto, evRec 0.79->0.71; amortized flow 0.72 ms/frame."
+    },
+    {
+      "path": "runs/downstream_clips.json",
+      "producer": "scripts/train_downstream.py",
+      "note": "per-clip selection records for the downstream comparison"
+    }
+  ],
+  "figures": [
+    {
+      "path": "runs/aoe_peaks",
+      "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
+    },
+    {
+      "path": "runs/inspect_*.jpg",
+      "description": "Synthetic-rig frame inspections (event rendering checks)."
+    },
+    {
+      "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
+      "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
+    },
+    {
+      "path": "runs/debug_sync.png / runs/blend_*.png",
+      "description": "IMU-video sync and warp-vs-frame blend debug images."
+    }
+  ],
+  "logs": [
+    {"path": "runs/capture.log", "description": "webcam capture log"},
+    {"path": "runs/screencap*.log", "description": "screen recording experiments"},
+    {"path": "runs/play*.log", "description": "scene playback logs"}
+  ]
+}
