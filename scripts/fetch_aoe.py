@@ -129,13 +129,15 @@ def seg_stats(seg: str) -> dict | None:
         if any(a.get("verb") not in PASSIVE_VERBS and a.get("hand") != "none"
                for a in acts):
             active.append((float(s["start_ts"]), float(s["end_ts"])))
-    # total physical rotation rate (deg/s) from consecutive cam_c2w poses
+    # mean physical rotation rate (deg/s) from consecutive cam_c2w poses;
+    # fps recovered from traj length over annotated duration
     rates = []
     for t in range(1, len(traj)):
         R = traj[t][:3, :3].T @ traj[t - 1][:3, :3]
         c = min(max((np.trace(R) - 1.0) / 2.0, -1.0), 1.0)
         rates.append(np.degrees(np.arccos(c)))
-    motion_p95 = float(np.percentile(rates, 95)) if rates else 0.0
+    fps = (len(traj) - 1) / seconds if seconds > 0 else 30.0
+    motion_p95 = float(np.percentile(rates, 95)) * fps if rates else 0.0
     return {"seg": seg, "seconds": round(seconds, 1),
             "scenes": sorted(scenes), "verbs": sorted(verbs),
             "n_active": len(active),
@@ -152,6 +154,13 @@ def cmd_select(args) -> None:
     pool = [s for s in stats if s["seconds"] >= 90 and s["n_active"] >= 3]
     print(f"{len(stats)} probed, {len(pool)} pass the >=90s & >=3-active "
           f"filter")
+    if args.motion_min > 0:
+        hi = [s for s in pool if s["motion_p95"] >= args.motion_min]
+        print(f"{len(hi)} pass motion_p95 >= {args.motion_min} deg/s "
+              f"(pool p50/p95 motion: "
+              f"{np.percentile([s['motion_p95'] for s in pool], 50):.2f}/"
+              f"{np.percentile([s['motion_p95'] for s in pool], 95):.2f})")
+        pool = hi
     # greedy max-coverage: new scenes dominate, then new verbs, then head
     # motion closest to 30 deg/s (enough ego-rotation to matter, not a rig
     # shake-out)
@@ -195,6 +204,9 @@ def main():
     p.set_defaults(fn=cmd_probe)
     p = sub.add_parser("select", help="pick diverse subset")
     p.add_argument("--k", type=int, default=8)
+    p.add_argument("--motion-min", type=float, default=0.0,
+                   help="keep only segments with traj-derived motion_p95 "
+                        ">= this (deg/s) — for the walking-scale regime")
     p.set_defaults(fn=cmd_select)
     p = sub.add_parser("fetch", help="download selected videos")
     p.set_defaults(fn=cmd_fetch)

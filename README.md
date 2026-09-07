@@ -475,10 +475,30 @@ event recall 1.00 -> 0.94; at the clip level, AdaptiveTrigger stored
 7.9% -> 20.6% with recall 0.49 -> 0.55 — the vetoed runs were dominated
 by ego-motion modeling error even at sub-pixel shifts.
 
+**The high-motion end** (2 segments at the top of the 259-probed pool,
+p95 |yaw| 31–52 deg/s vs 1–41 on the desk clips; `data/aoe_motion`,
+`runs/flow_eval_motion.json`) finally leaves the sub-pixel regime — and
+the ranking of predictors flips, with caveats. Calm residual: gyro warp
+is now *worse* than naive (0.090 vs 0.080; the 2D-shift model leaves
+roll uncompensated and the sign-calibration is weaker there, y r = 0.15
+on the warehouse clip), while DIS flow clearly wins on quality (0.052) —
+and loses on cost by ~250x (8.4 ms vs 0.033 ms per frame). The robust
+trigger also thins out (stored 1.4%/1.2%, evRec 0.09/0.04): continuous
+real motion makes the residual heavy-tailed, the winsorized sd inflates,
+and the z-bar rises. The arbiter is exactly the bridge for this regime:
+it vetoes 11% of runs on the liveliest clip (stored 0.92 -> 0.62 at
+precision 1.00, amortized 0.58 ms/frame). Honest bottom line: on this
+corpus even the top-decile rotation stays ~0.5 map px/frame at 28x28, so
+the gyro warp's quality window is narrow at this resolution — its case
+is cost, and the flow arbiter is the paid upgrade when the cheap model
+breaks. (n=2; the axis-calibration caveat above applies.)
+
 ```bash
 # pick + download segments (probe -> select -> fetch, each cached)
 .venv/bin/python scripts/fetch_aoe.py probe --n 60
 .venv/bin/python scripts/fetch_aoe.py select --k 8
+# high-motion regime: filter by trajectory-derived rotation before selecting
+.venv/bin/python scripts/fetch_aoe.py select --k 3 --motion-min 60
 .venv/bin/python scripts/fetch_aoe.py fetch
 # convert to the standard sequence layout, one dir per segment
 for d in data/aoe_src/<segment>; do

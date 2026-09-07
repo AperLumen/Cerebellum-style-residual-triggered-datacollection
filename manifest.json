@@ -35,6 +35,13 @@
       "producers": ["scripts/fetch_aoe.py"]
     },
     {
+      "path": "data/aoe_motion",
+      "type": "prepared-real",
+      "description": "High-motion Open-AoE pair (top of 259-probed pool by trajectory rotation: p95 |yaw| 51.6/31.0 deg/s; bathroom/hallway/laundry + warehouse/workshop), same layout as data/aoe. Frames deleted after evals (regenerate via prep_aoe.py).",
+      "size": "0.5G",
+      "producers": ["scripts/fetch_aoe.py", "scripts/prep_aoe.py", "scripts/extract_featmaps.py"]
+    },
+    {
       "path": "data/aoe",
       "type": "prepared-real",
       "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing.",
@@ -46,8 +53,14 @@
     {
       "path": "runs/flow_eval.json",
       "producer": "scripts/run_flow_eval.py",
-      "note": "last run: data/aoe --n-val 9 --robust (Open-AoE 9 segments, winsorized stats). Earlier synthetic-rig numbers are in the README tables and are overwritten by the most recent run.",
-      "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination (stored 0.99); gyro-warp calm residual ~= naive everywhere (sub-pixel ego-motion). Latency: DIS 8.3ms, flow step 6.6ms, gyro shift 0.073ms, pixel core 0.199ms, backbone 1.078ms per frame."
+      "note": "last run: data/aoe_motion --n-val 2 --robust (high-motion pair). The n=9 desk-clip run was overwritten and rebuilt from its logged output as runs/flow_eval_aoe9.json (aggregate fields exact; clip counts/event_frame_cover not printed in the log).",
+      "headline": "aoe_motion robust: calm residual naive 0.080 / gyro 0.090 (warp hurts: roll uncompensated, weak y-cal) / flow 0.052 (quality winner, 8.4ms vs 0.033ms gyro shift); gyro clips stored 1.4%/1.2% evRec 0.09/0.04 (heavy tail inflates winsorized sd). AoE n=9 desk numbers: see runs/flow_eval_aoe9.json and README."
+    },
+    {
+      "path": "runs/flow_eval_aoe9.json",
+      "producer": "scripts/run_flow_eval.py",
+      "note": "rebuilt from logged per-seq output of the 27ed74d n=9 run (see runs/flow_eval.json note)",
+      "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination; gyro-warp calm residual ~= naive everywhere."
     },
     {
       "path": "runs/downstream_results.json",
@@ -58,8 +71,14 @@
     {
       "path": "runs/arbiter_eval.json",
       "producer": "scripts/run_arbiter_eval.py",
-      "note": "last run: data/aoe --n-val 9 --robust. Synthetic-rig run: 6/118 val runs vetoed, stored 0.520->0.498, precision 0.146->0.155, evRec 1.0, amortized ~0.15 ms/frame.",
-      "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level AdaptiveTrigger stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
+      "note": "last run: data/aoe_motion --n-val 2 --robust. The n=9 desk-clip run was overwritten and rebuilt from its logged aggregate output as runs/arbiter_eval_aoe9.json.",
+      "headline": "aoe_motion robust: seq_000 130 runs, 14 vetoes, runs-level stored 0.92->0.62 at precision 1.00 (evRec 1.00->0.82); seq_001 0 vetoes; amortized flow 0.58 ms/frame. AoE n=9 desk numbers: 140 runs/seq, stored 0.89->0.72, evRec 1.00->0.94 (runs/arbiter_eval_aoe9.json)."
+    },
+    {
+      "path": "runs/arbiter_eval_aoe9.json",
+      "producer": "scripts/run_arbiter_eval.py",
+      "note": "rebuilt from logged aggregate output of the 27ed74d n=9 run (see runs/arbiter_eval.json note)",
+      "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
     },
     {
       "path": "runs/downstream_clips.json",

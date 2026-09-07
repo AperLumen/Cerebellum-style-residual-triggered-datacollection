@@ -258,10 +258,14 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/dataset
 
 run 级别的光流仲裁同样推广（`runs/arbiter_eval.json`）：九个片段上稳健统计产生约 140 个候选 run/段，级联否决其中的 8–31%（光流调用摊销到 0.89 ms/帧），把被标记帧的存储量从 0.89 降到 0.72，precision 保持 0.994，事件 recall 1.00 → 0.94；clip 级别上 AdaptiveTrigger stored 7.9% → 20.6%、recall 0.49 → 0.55——被否决的 run 即便在亚像素位移下也主要由自运动建模误差主导。
 
+**高运动端**（259 段探测池里运动 top 的 2 段，p95 |yaw| 31–52°/s，桌面片段为 1–41；`data/aoe_motion`、`runs/flow_eval_motion.json`）终于离开了亚像素 regime——预测器的排序随之翻转，但带保留。平静残差：gyro warp 现在比 naive *更差*（0.090 vs 0.080；二维平移模型不补偿 roll，且该段符号标定更弱，仓库段 y r = 0.15），而 DIS 光流在质量上明确胜出（0.052）——成本上则以 ~250 倍落败（8.4 ms vs 0.033 ms/帧）。稳健触发器也变稀（stored 1.4%/1.2%，evRec 0.09/0.04）：连续真实运动让残差重尾化，winsorized sd 膨胀，z 阈值水涨船高。仲裁正是这个 regime 的桥：在最活跃的片段上否决 11% 的 run（stored 0.92 → 0.62，precision 1.00，摊销 0.58 ms/帧）。诚实的底线：在这个语料上即使 top-decile 的旋转量在 28×28 上也只有 ~0.5 特征图像素/帧，所以 gyro warp 在该分辨率下的质量窗口很窄——它的理由是成本，光流仲裁是廉价模型失效时的付费升级。（n=2，且上述标定保留成立。）
+
 ```bash
 # 挑选 + 下载 segment（probe -> select -> fetch，每步有缓存）
 .venv/bin/python scripts/fetch_aoe.py probe --n 60
 .venv/bin/python scripts/fetch_aoe.py select --k 8
+# 高运动 regime：先按轨迹旋转量过滤再选
+.venv/bin/python scripts/fetch_aoe.py select --k 3 --motion-min 60
 .venv/bin/python scripts/fetch_aoe.py fetch
 # 逐个转换为标准序列布局
 for d in data/aoe_src/<segment>; do
