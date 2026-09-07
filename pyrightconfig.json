@@ -2,5 +2,7 @@
   "venvPath": ".",
   "venv": ".venv",
   "include": ["cerebellum_cancel", "scripts", "tests"],
+  "ignore": ["third_party"],
+  "extraPaths": ["third_party/RAFT"],
   "pythonVersion": "3.9"
 }

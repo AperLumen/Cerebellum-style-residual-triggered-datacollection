@@ -5,3 +5,4 @@ data/
 runs/
 __pycache__/
 *.pyc
+third_party/
