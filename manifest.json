@@ -60,12 +60,14 @@
   {
    "path": "data/aoe",
    "type": "prepared-real",
-   "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing.",
+   "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_008, 67.4k frames total. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing. Also carries features.npy (576-d pooled, streamed from mp4 by scripts/extract_features_aoe.py) and verb_labels.npy (7-class frame-level verbs, scripts/make_verb_labels.py; verbs.json at dataset root) for the real-data downstream value experiment.",
    "size": "2.4G",
    "producers": [
     "scripts/fetch_aoe.py",
     "scripts/prep_aoe.py",
-    "scripts/extract_featmaps.py"
+    "scripts/extract_featmaps.py",
+    "scripts/extract_features_aoe.py",
+    "scripts/make_verb_labels.py"
    ]
   },
   {
@@ -168,6 +170,18 @@
    "producer": "scripts/run_flow_eval.py",
    "note": "backup of the flow_eval.json state before the 448px real cross (synthetic rig at 448px input).",
    "headline": "synthetic 448px quality: train naive 0.0750/gyro 0.0453/flow 0.0336, val 0.1694/0.0717/0.0523 (gyro gain -58%, the top of the resolution sweep)."
+  },
+  {
+   "path": "runs/trans_eval_data_aoe_motion_val.json",
+   "producer": "scripts/run_trans_eval.py",
+   "note": "translation-term evaluation on the real high-motion pair (rotation-only vs rotation+constant-depth translation vs DIS). prep_aoe.py exports camera-frame translation velocity (SLAM trajectory) + a per-segment 1/Z scale calibrated against DIS flow.",
+   "headline": "NEGATIVE: constant-depth uniform translation warp hurts (calm residual gyro 0.0901 -> gyro+trans 0.0938, both seqs). Real scenes are depth-structured; the model class is wrong, calibration cannot fix it."
+  },
+  {
+   "path": "runs/downstream_aoe_results.json",
+   "producer": "scripts/train_downstream_aoe.py",
+   "note": "real-data downstream value rerun on Open-AoE (scripts/extract_features_aoe.py streams 576-d pooled features from the source mp4; scripts/make_verb_labels.py builds 7-class frame-level verb labels — the binary active-manipulation mask is degenerate on 8/9 segments). 6 segments train / 3 val, robust trigger, one-vs-rest logistic heads.",
+   "headline": "NEGATIVE / no transfer: cerebellum stored 7.1% val mAP 0.197 ivRec@10 0.75 vs uniform(0.5x, half the bytes) 0.209, uniform(1x) 0.192, oracle 0.203/0.80. Trigger selects kinetically-unpredictable frames, not semantically discriminative ones (cf. AUC 0.47). Single split, no error bars."
   }
  ],
  "figures": [

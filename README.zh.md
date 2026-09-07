@@ -315,11 +315,16 @@ run 级别的光流仲裁同样推广（`runs/arbiter_eval.json`）：九个片�
 
 **高运动端**（259 段探测池里运动 top 的 2 段，p95 |yaw| 31–52°/s，桌面片段为 1–41；`data/aoe_motion`、`runs/flow_eval_motion.json`）终于离开了亚像素 regime——预测器的排序随之翻转，但带保留。平静残差：gyro warp 现在比 naive *更差*（0.090 vs 0.080；二维平移模型不补偿 roll，且该段符号标定更弱，仓库段 y r = 0.15），而 DIS 光流在质量上明确胜出（0.052）——成本上则以 ~250 倍落败（8.4 ms vs 0.033 ms/帧）。稳健触发器也变稀（stored 1.4%/1.2%，evRec 0.09/0.04）：连续真实运动让残差重尾化，winsorized sd 膨胀，z 阈值水涨船高。仲裁正是这个 regime 的桥：在最活跃的片段上否决 11% 的 run（stored 0.92 → 0.62，precision 1.00，摊销 0.58 ms/帧）。诚实的底线：在这个语料上即使 top-decile 的旋转量在 28×28 上也只有 ~0.5 特征图像素/帧，所以 gyro warp 在该分辨率下的质量窗口很窄——它的理由是成本，光流仲裁是廉价模型失效时的付费升级。（n=2，且上述标定保留成立。）
 
-**448 px 分辨率交叉验证**（同一对片段，特征图翻倍至 38×38；`data/aoe_motion_448`、`runs/flow_eval_motion448.json`）：设计规则"特征越细 gyro warp 越值"——在合成数据上单调成立（224/336/448 收益 -41%/-52%/-58%）——**不能迁移到真实高运动**。gyro 依然比 naive 差（0.0535 → 0.0614，+15%），DIS 光流逐段翻转（走廊段 0.086、仓库段 0.051；均值 0.068，两段中有一段比 naive 还差）。在真实数据上，损伤主要由纯旋转模型看不见的东西主导——平移/视差、滚动快门畸变——而更多像素让它们*更显眼*而非更不显眼。分辨率修的是估计器误差，修不了模型类误差。下一个要补的模型缺口是平移，不是分辨率：
+**448 px 分辨率交叉验证**（同一对片段，特征图翻倍至 38×38；`data/aoe_motion_448`、`runs/flow_eval_motion448.json`）：设计规则"特征越细 gyro warp 越值"——在合成数据上单调成立（224/336/448 收益 -41%/-52%/-58%）——**不能迁移到真实高运动**。gyro 依然比 naive 差（0.0535 → 0.0614，+15%），DIS 光流逐段翻转（走廊段 0.086、仓库段 0.051；均值 0.068，两段中有一段比 naive 还差）。在真实数据上，损伤主要由纯旋转模型看不见的东西主导——平移/视差、滚动快门畸变——而更多像素让它们*更显眼*而非更不显眼。分辨率修的是估计器误差，修不了模型类误差。下一个要补的模型缺口是平移，不是分辨率——而补平移比看起来难：
+
+**平移项：实测，负收益**（`scripts/run_trans_eval.py`、`runs/trans_eval_data_aoe_motion_val.json`）。SLAM 轨迹同样能差分出 cam 系平移速度，`prep_aoe.py` 会逐段标定一个常深度比例（1/Z，对 DIS 流最小二乘——与 gyro 符号标定、f_map 同级）。在高运动对上，旋转+平移 warp 比纯旋转*更差*（calm residual 0.0901 → 0.0938，两段皆然）。均匀平移解释了均值流却造成逐格错位：真实场景深度结构化（走廊近墙和远端移动不同），常深度模型类是错的，任何逐段标量标定都修不了。平移补偿要么带深度结构（单目深度、平面模型），要么留在按需光流仲裁那条路上。
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_448 \
-  --n-train 0 --n-val 2 --robust
+# re-prep 会写出平移列 + 逐段 trans_scale
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe_motion/val/seq_XXX
+PYTHONPATH=. .venv/bin/python scripts/run_trans_eval.py data/aoe_motion \
+    --split val --n-seq 2
 ```
 
 ```bash
@@ -338,17 +343,42 @@ PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-
 PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 9 --robust
 ```
 
+## 真实数据下游价值（负结果）
+
+合成的 headline 结论（cerebellum 片段每存储字节训练价值更高）**不迁移**到真实 egocentric 视频——已实测，带保留。
+
+任务层面被数据强制改了一处："主动操作"标注在 9 段中的 8 段覆盖 ~100% 帧，binary 事件检测任务退化。真实数据任务改为帧级动词分类：取原子动作标注中 7 个目标动词（fold、grasp、insert、set_down、thread、unfold、wipe，每类在训练/验证两半各 ≥300 帧；`scripts/make_verb_labels.py`），one-vs-rest logistic 头 + 冻结 576 维 pooled 特征，6 段训练 / 3 段验证（`scripts/train_downstream_aoe.py`、`runs/downstream_aoe_results.json`）：
+
+```
+方法              存储占比  帧数    val mAP  区间recall@10%
+cerebellum        0.071    3296    0.197      0.75
+uniform(0.5x)     0.035    1643    0.209      0.68
+uniform(1x)       0.071    3317    0.192      0.75
+uniform(2x)       0.143    6696    0.204      0.77
+uniform(4x)       0.290   13516    0.193      0.73
+oracle            0.056    2528    0.203      0.80
+```
+
+触发器本身工作正常（stored 7.1%、区间 recall 0.75），但选中的帧不是判别帧：残差触发存的是*运动学上不可预测*的帧（运动突变），而动词身份是语义信息、分布在整个操作区间——与残差峰对动作标注帧级反相关的实测（AUC 0.47，见上）一致。mAP 散布（0.19–0.21）在噪声量级；单 split、无 seed 误差棒。适用范围结论：价值主张在它设计的稀疏物理事件 regime（跌落、抓取失败、异常）成立；稠密语义任务的采集筛选需要别的信号。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/extract_features_aoe.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/make_verb_labels.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
+```
+
 ## 诚实的局限性
 
 - **屏幕录制是此方法的死路（实测，非推测）**。对场景做过一次 `screencapture -v` 录制的端到端测试：静态帧很干净（残差 4e-5），但运动下即使*oracle*补偿器（完美知道真实平移）也留下 ~0.066 的残差，且最佳的整数对齐帧对差异为 1.16/255，而原始帧是 0.009/255——约 130 倍的下限。ProMotion 合成器帧混合 / HEVC B 帧平滑破坏了此方法需要的信号（帧间锐利的时间采样）。结论：在真实相机（iPhone / webcam）上验证，它们采样的是锐利瞬间，而不是屏幕录制。
-- **仅旋转补偿**：未建模平移/视差（无加速度计融合）；学习到的权重能吸收一部分，但行走的设备会产生比此合成 demo 更大的残差。
+- **仅旋转补偿**：未建模平移/视差（无加速度计融合）；学习到的权重能吸收一部分，但行走的设备会产生比此合成 demo 更大的残差。常深度平移项已实测为*负收益*（见上节）：真实场景深度结构化，平移需要带深度结构的模型。
 - **合成 demo 是有利的**：真实场景有自动对焦呼吸、曝光自适应——在负像吸收它们之前，这些看起来都像"surprise"。这种吸收正是多时间尺度可塑性的用途，但需要真实数据调优。
 - **阈值**：featmap/下游路径现在自校准（`AdaptiveTrigger`——轨迹自身平静统计量上的无量纲 6/2.5 门控）。像素空间 demo 路径仍使用手调 `TriggerConfig` 值；且 regime 检查表明自校准买到的是工作 regime 内的精度，不是 regime 不变性。
-- ~~下游价值未测量~~ **已完成**（见上节）：cerebellum 片段训练的检测器每存储字节优于均匀采样——也优于把预算全花在事件帧上的 oracle。
+- ~~下游价值未测量~~ **合成上已完成**（见上节）：cerebellum 片段训练的检测器每存储字节优于均匀采样——也优于把预算全花在事件帧上的 oracle。**真实 egocentric 视频上优势未迁移**（见上节）：触发器选的是运动不可预测的帧，不是语义重要的帧。
+- **真实数据下游表是单 split、单 seed**：mAP 散布在噪声量级；下一个是 3-fold 跨段 + 误差棒重跑，再下结论。
 
 ## 下一步
 
 1. **iPhone 实拍**（真正的实验）：按 README 录制手持视频 + IMU；标注事件；跑同样的评估。这是当前的 critical path——屏幕录制捷径已被证伪。
 2. 如果想要一个桌面版的中间方案，可做 webcam 对着屏幕的变体：相机通道时间上是锐利的，但需要镜子或对着屏幕的外接相机（内置摄像头拍到的是用户自己）。
-3. ~~下游训练对比~~ **已完成**（见上节）：cerebellum 片段在 4 倍字节下胜过 uniform，并在事件 recall 上胜过 oracle。
-4. 给 action 向量加入加速度计特征（平移预测）。
+3. ~~下游训练对比~~ **合成上已完成**（见上节）：cerebellum 片段在 4 倍字节下胜过 uniform，并在事件 recall 上胜过 oracle。真实数据重跑：优势未迁移（见上节）——排队中的后续：3-fold 跨段 + seed 误差棒，然后在触发器本该赢的稀疏物理事件 regime 做正向验证。
+4. ~~给 action 向量加入加速度计特征（平移预测）~~ **已实测，负收益**（见上节）：常深度平移 warp 帮倒忙；需要深度结构（单目深度/平面模型），或者留在按需光流仲裁。

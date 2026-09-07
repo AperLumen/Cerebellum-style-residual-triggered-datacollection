@@ -595,11 +595,29 @@ on one of two). On real data the damage is dominated by what the
 rotation-only model cannot see — translation/parallax and rolling-shutter
 distortion — and more pixels make that *more* visible, not less.
 Resolution fixes estimator error; it cannot fix model-class error. The
-next model gap to close is translation, not resolution:
+next model gap to close is translation, not resolution — and closing it
+turned out to be harder than it looks:
+
+**Translation term: measured, negative** (`scripts/run_trans_eval.py`,
+`runs/trans_eval_data_aoe_motion_val.json`). The SLAM trajectory also
+yields camera-frame translation velocity, and prep_aoe.py calibrates a
+per-segment constant-depth scale (1/Z, least squares against DIS flow —
+same calibration status as the gyro sign flips and f_map). On the
+high-motion pair the rotation+translation warp is *worse* than
+rotation-only (calm residual 0.0901 -> 0.0938, both sequences). A uniform
+translation shift explains the mean flow but misaligns per-cell: real
+scenes are depth-structured (near walls + far end of a hallway move
+differently), so the constant-depth model class is wrong, and no
+per-segment scalar calibration can fix that. Translation compensation
+needs depth structure (monocular depth, plane models) or stays with the
+on-demand flow arbiter.
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_448 \
-  --n-train 0 --n-val 2 --robust
+# re-prep writes translation columns + the per-segment trans_scale
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe_motion/val/seq_XXX
+PYTHONPATH=. .venv/bin/python scripts/run_trans_eval.py data/aoe_motion \
+    --split val --n-seq 2
 ```
 
 ```bash
@@ -618,6 +636,47 @@ PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe --n-train 0 --n-
 PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 --n-val 9 --robust
 ```
 
+## Real-data downstream value (negative result)
+
+The synthetic headline (cerebellum clips train better per stored byte)
+does **not** transfer to real egocentric video — measured, with caveats.
+
+A task-level change was forced by the data: the "active manipulation"
+annotation covers ~100% of frames in 8 of 9 segments, so the binary
+event-detection task degenerates. The real-data task is frame-level verb
+classification over 7 target verbs from the atomic-action annotations
+(fold, grasp, insert, set_down, thread, unfold, wipe — each >= 300
+annotated frames in both split halves; `scripts/make_verb_labels.py`),
+one-vs-rest logistic heads on frozen 576-d pooled features, 6 segments
+train / 3 val (`scripts/train_downstream_aoe.py`,
+`runs/downstream_aoe_results.json`):
+
+```
+method          stored  frames  val mAP  ivRec@10%
+cerebellum       0.071    3296    0.197     0.75
+uniform(0.5x)    0.035    1643    0.209     0.68
+uniform(1x)      0.071    3317    0.192     0.75
+uniform(2x)      0.143    6696    0.204     0.77
+uniform(4x)      0.290   13516    0.193     0.73
+oracle           0.056    2528    0.203     0.80
+```
+
+The trigger works (stored 7.1%, interval recall 0.75) but the selected
+frames are not the discriminative ones: residual triggering stores what
+is *kinetically* unpredictable (motion bursts), while verb identity is
+semantic and spread over the whole manipulation interval — consistent
+with the measured frame-level anticorrelation of residual peaks vs
+action annotations (AUC 0.47, §above). The mAP spread (0.19-0.21) is
+noise-scale; single split, no seed error bars. Scope conclusion: the
+value proposition holds in the sparse-physical-event regime it was
+designed for; dense semantic acquisition needs a different signal.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/extract_features_aoe.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/make_verb_labels.py data/aoe
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
+```
+
 ## Honest limitations
 
 - **Screen recording is a dead end for this method (measured, not assumed).**
@@ -632,7 +691,9 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 -
   captures.
 - **Rotation-only compensation**: translation/parallax is not modeled (no
   accelerometer fusion); the learned weights absorb some of it, but a walking
-  rig will produce larger residuals than this synthetic demo.
+  rig will produce larger residuals than this synthetic demo. A constant-depth
+  translation term was measured and is a *negative* (section above): real
+  scenes are depth-structured, so translation needs depth-aware models.
 - **The synthetic demo is favorable**: real scenes have autofocus breathing,
   exposure adaptation — all of which look like "surprise" until the negative
   image absorbs them. That absorption is exactly what the multi-timescale
@@ -642,9 +703,15 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 -
   statistics). The pixel-space demo path still uses hand-set `TriggerConfig`
   values; and the regime check shows self-calibration buys precision at the
   operating regime, not regime invariance.
-- ~~Downstream value not yet measured~~ **done** (section above): cerebellum
-  clips train better detectors per stored byte than uniform sampling — and
-  better than an oracle that spends its budget only on event frames.
+- ~~Downstream value not yet measured~~ **done on synthetic** (section
+  above): cerebellum clips train better detectors per stored byte than
+  uniform sampling — and better than an oracle that spends its budget
+  only on event frames. **On real egocentric video the advantage does not
+  transfer** (section above): the trigger selects kinetically
+  unpredictable frames, not semantically discriminative ones.
+- **Real-data downstream table is single-split, single-seed**: the mAP
+  spread is noise-scale; a 3-fold cross-segment rerun with error bars is
+  queued before drawing scope conclusions.
 
 ## Next steps
 
@@ -654,6 +721,13 @@ PYTHONPATH=. .venv/bin/python scripts/run_arbiter_eval.py data/aoe --n-train 0 -
 2. Webcam-facing-screen variant if you want a desk-bound intermediate: the
    camera channel is temporally sharp, but needs a mirror or external camera
    pointed at the screen (the built-in one films the user).
-3. ~~Downstream training comparison~~ **done** (section above): cerebellum
-   clips beat uniform at 4x bytes, and beat the oracle on event recall.
-4. Add accelerometer features to the action vector (translation prediction).
+3. ~~Downstream training comparison~~ **done on synthetic** (section
+   above): cerebellum clips beat uniform at 4x bytes, and beat the oracle
+   on event recall. Real-data rerun: advantage does not transfer
+   (section above) — queued follow-up: 3-fold cross-segment + seed error
+   bars, then a sparse-physical-event regime test where the trigger
+   should win.
+4. ~~Add accelerometer features to the action vector (translation
+   prediction)~~ **measured, negative** (section above): constant-depth
+   translation warp hurts; needs depth structure (monocular depth /
+   plane models) or stays with the on-demand flow arbiter.
