@@ -49,7 +49,7 @@ def main():
             if vw is None:
                 h, w = gray.shape
                 vw = cv2.VideoWriter(f"{args.out}/video.mp4",
-                                     cv2.VideoWriter_fourcc(*"mp4v"), 30, (w, h))
+                                     cv2.VideoWriter.fourcc(*"mp4v"), 30, (w, h))
                 print(f"recording at {w}x{h}")
             vw.write(frame)
             brightness.append(float(gray.mean()))

@@ -50,7 +50,9 @@ def gyro_trace(fm, gyro, meta, fmap_scale=1.0, robust=False):
     for t in range(len(fm)):
         out = canc.step(fm[t], gyro[t])
         zs.append(out["z"])
-        sds.append(np.sqrt(canc.var) + 1e-3)
+        var = canc.var
+        assert var is not None      # set by the step just above
+        sds.append(np.sqrt(var) + 1e-3)
     return np.asarray(zs), np.asarray(sds)
 
 
@@ -84,7 +86,7 @@ def arbitrate(fm, grays, gyro, meta, z, runs, explain_ratio):
     z2 = z.copy()
     fz = np.abs(z).max(axis=(1, 2, 3))
     n_calls, vetoed = 0, []
-    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     fcfg = FlowWarpConfig()
     cfg = cancel_cfg(meta)
     for a, b in runs:

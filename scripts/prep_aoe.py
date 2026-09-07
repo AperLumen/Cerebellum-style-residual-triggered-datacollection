@@ -23,12 +23,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 
 import cv2
 import numpy as np
+
+from cerebellum_cancel.flow_cancel import dis_calc
 
 MAP_W = 28          # featmap width (MobileNetV3 features[:3])
 
@@ -55,14 +56,14 @@ def calibrate_signs(gyro: np.ndarray, frames: list, fps: float,
     n = len(frames)
     f_flow = fx_full * 320.0 / frames[0].shape[1]   # focal at 320x240
     idx = np.linspace(1, n - 1, 40).astype(int)
-    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     pred, meas = [], []
     for t in idx:
         g1 = cv2.resize(cv2.cvtColor(frames[t - 1], cv2.COLOR_BGR2GRAY),
                         (320, 240))
         g2 = cv2.resize(cv2.cvtColor(frames[t], cv2.COLOR_BGR2GRAY),
                         (320, 240))
-        flow = dis.calc(g1, g2, None)
+        flow = dis_calc(dis, g1, g2)
         m = flow.reshape(-1, 2).mean(axis=0)        # content shift, flow px
         p = [-f_flow * np.tan(np.radians(gyro[t][1]) / fps),   # warp amount
              -f_flow * np.tan(np.radians(gyro[t][0]) / fps)]
@@ -98,6 +99,8 @@ def main():
             if os.path.exists(p):
                 video = p
                 break
+    if video is None:
+        raise IOError(f"no mp4 found in {args.src}")
     info_p = os.path.join(args.src, "undistorted_video_info.json")
     info = json.load(open(info_p)) if os.path.exists(info_p) else {}
     fps = float(info.get("fps", 30.0))

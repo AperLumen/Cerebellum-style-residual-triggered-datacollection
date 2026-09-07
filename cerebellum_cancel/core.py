@@ -68,7 +68,7 @@ class AdaptiveTrigger:
     n: int = 0
 
     def __post_init__(self):
-        self._inner_state = None    # SurpriseTrigger, created in update()
+        self._inner_state: SurpriseTrigger | None = None  # created in update()
 
     def _stat_update(self, score: float):
         d = score - self.mu
@@ -98,6 +98,8 @@ class AdaptiveTrigger:
         return self._inner_state.clips if self._inner_state else []
 
     def finalize(self, t_end: float):
+        if self._inner_state is None:
+            return []
         return self._inner_state.finalize(t_end)
 
 
@@ -208,8 +210,8 @@ class SurpriseTrigger:
         self.cfg = cfg
         self.fps = fps
         self.on = False
-        self.start_t = None
-        self.last_hit_t = None
+        self.start_t: float | None = None
+        self.last_hit_t: float | None = None
         self.clips: list[tuple[float, float]] = []
         self.z_ema = 0.0
         self.cnt = 0
@@ -239,6 +241,8 @@ class SurpriseTrigger:
                 self.cnt = 0
             self.prev_strong = strong
         else:
+            # self.on implies onset already set start_t/last_hit_t
+            assert self.start_t is not None and self.last_hit_t is not None
             if self.z_ema > thr_off or strong:
                 self.last_hit_t = t
             if t - self.last_hit_t > self.cfg.post_roll:
@@ -248,6 +252,8 @@ class SurpriseTrigger:
 
     def finalize(self, t_end: float):
         if self.on:
+            # self.on implies onset already set start_t
+            assert self.start_t is not None
             self.clips.append((self.start_t, t_end))
             self.on = False
         # merge clips separated by less than min_clip_len

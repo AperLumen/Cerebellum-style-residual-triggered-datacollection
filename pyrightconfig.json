@@ -1,0 +1,6 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["cerebellum_cancel", "scripts", "tests"],
+  "pythonVersion": "3.9"
+}

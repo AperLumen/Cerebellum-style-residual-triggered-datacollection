@@ -44,7 +44,7 @@ def main():
     except Exception:
         sw = sh = None
     cv2.namedWindow("scene", cv2.WINDOW_NORMAL)
-    if sw:
+    if sw and sh:
         cv2.resizeWindow("scene", sw, sh)
         cv2.moveWindow("scene", 0, 0)
     cv2.setWindowProperty("scene", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -63,6 +63,8 @@ def main():
     t0 = time.time()
     for i, p in enumerate(paths):
         img = cv2.imread(p, 0)
+        if img is None:
+            continue
         cv2.imshow("scene", img)
         # schedule against wall clock so playback runs at true 30 fps
         delay = max(1, int((i + 1) / FPS * 1000 - (time.time() - t0) * 1000))

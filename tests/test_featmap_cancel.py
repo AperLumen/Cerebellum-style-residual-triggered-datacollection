@@ -55,11 +55,14 @@ def test_calm_gate_blocks_updates():
     F = np.ones((2, 8, 8), dtype=np.float32)
     canc.step(F, np.zeros(3))
     canc.step(F, np.zeros(3))
-    mu_before = canc.mu.copy()
+    mu_before = canc.mu
+    assert mu_before is not None
     big = np.ones((2, 8, 8), dtype=np.float32) * 20.0
     out = canc.step(big, np.zeros(3))  # surprise >> calm_tau
+    mu_after = canc.mu
+    assert mu_after is not None
     assert not out["learned"]
-    assert np.allclose(canc.mu, mu_before)
+    assert np.allclose(mu_after, mu_before)
 
 
 def test_energy_and_maxcell_scores_agree_on_single_hot():
@@ -90,7 +93,7 @@ def test_robust_stats_immune_to_spikes():
     zs = np.asarray(zs)
     mz = np.abs(zs).max(axis=(1, 2, 3))
     calm = [t for t in range(200) if t not in (50, 120)]
-    assert np.median(mz[10:]) < 5.0             # bulk stays ordinary
+    assert np.median(mz[calm]) < 5.0            # bulk stays ordinary
     assert mz[50] > 20 and mz[120] > 20         # spikes still visible
 
 

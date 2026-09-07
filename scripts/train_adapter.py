@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import warnings
 
 import numpy as np
@@ -125,18 +124,21 @@ def main():
             train_res = residuals_for(train, factory)
             val_res = residuals_for(val, factory)
         if untrained:
-            head = EnergyHead()
-            ap_mean, rec = evaluate(val_res, head)
+            energy_head = EnergyHead()
+            ap_mean, rec = evaluate(val_res, energy_head)
             row = f"{'--':>8}" * (len(ks) - 1)
             print(f"{name:<15}{row}{ap_mean:>8.3f}{rec:>12.2f}")
             continue
         cells = []
+        head: LogisticHead | None = None
         for k in ks:
             head = LogisticHead(train_res[0][0].shape[1]).fit(
                 np.vstack([r for r, _, _ in train_res[:k]]),
                 np.concatenate([l for _, l, _ in train_res[:k]]))
             ap_mean, _ = evaluate(val_res, head)
             cells.append(ap_mean)
+        if head is None:
+            continue
         _, rec = evaluate(val_res, head)        # k=40 head
         print(f"{name:<15}" + "".join(f"{a:>8.3f}" for a in cells)
               + f"{rec:>12.2f}")

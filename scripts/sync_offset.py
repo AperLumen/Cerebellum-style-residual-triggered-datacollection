@@ -20,6 +20,8 @@ import numpy as np
 
 def load_recording(path: str, width: int = 320) -> tuple[np.ndarray, float]:
     cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise IOError(f"cannot open {path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frames = []
     while True:
@@ -35,6 +37,13 @@ def load_recording(path: str, width: int = 320) -> tuple[np.ndarray, float]:
 
 def highpass(x: np.ndarray) -> np.ndarray:
     return (x - x.mean()).ravel()
+
+
+def read_gray(path: str) -> np.ndarray:
+    img = cv2.imread(path, 0)
+    if img is None:
+        raise IOError(f"cannot read {path}")
+    return img
 
 
 def match_scene_frame(rec: np.ndarray, scene_frame: np.ndarray,
@@ -97,7 +106,7 @@ def estimate_lag(rec_dir: str, rec_fps: float, mirror: bool,
     meta = json.load(open(f"{rec_dir}/events.json"))
     video = meta.get("video", "video.mp4")
     rec, _ = load_recording(f"{rec_dir}/{video}")
-    scene0 = cv2.imread("data/synthetic/frames/00000.png", 0)
+    scene0 = read_gray("data/synthetic/frames/00000.png")
     aspect = scene0.shape[1] / scene0.shape[0]
 
     t = highpass(cv2.resize(sync_digit("1"), (rec.shape[2], rec.shape[1])))
@@ -125,7 +134,6 @@ def main():
     ap.add_argument("--scene-frames", default="data/synthetic/frames")
     args = ap.parse_args()
 
-    global SCENE_FRAMES
     with open(f"{args.dir}/events.json") as fp:
         meta = json.load(fp)
     fps = meta.get("fps")
@@ -141,7 +149,7 @@ def main():
     video_tmp = meta_tmp.get("video", "video.mp4")
     rec, _ = load_recording(f"{args.dir}/{video_tmp}")
     probe = int(min(lag + 3 * fps, len(rec) - 1))
-    scene0 = cv2.imread("data/synthetic/frames/00090.png", 0)
+    scene0 = read_gray(f"{args.scene_frames}/00090.png")
     sz = (rec.shape[2], rec.shape[1])
     t_n = highpass(cv2.resize(scene0, sz))
     t_m = highpass(cv2.resize(scene0[:, ::-1], sz))

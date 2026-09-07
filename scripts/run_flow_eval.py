@@ -22,6 +22,7 @@ import glob
 import json
 import os
 import time
+from typing import cast
 
 import cv2
 import numpy as np
@@ -30,7 +31,8 @@ from cerebellum_cancel.core import AdaptiveTrigger
 from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
                                                maxcell_score, rollout,
                                                shift_map)
-from cerebellum_cancel.flow_cancel import FlowWarpCancel, FlowWarpConfig, rollout_flow
+from cerebellum_cancel.flow_cancel import (FlowWarpCancel, FlowWarpConfig,
+                                           dis_calc, rollout_flow)
 from cerebellum_cancel.io import load_imu_csv
 
 
@@ -38,12 +40,19 @@ def seq_dirs(dataset, split):
     return sorted(glob.glob(f"{dataset}/{split}/seq_*"))
 
 
+def read_bgr(path: str) -> np.ndarray:
+    img = cv2.imread(path)
+    if img is None:
+        raise IOError(f"cannot read {path}")
+    return img
+
+
 def load_seq(seq):
     meta = json.load(open(f"{seq}/events.json"))
     fps = float(meta.get("fps", 30.0))
     fm = np.load(f"{seq}/featmaps.npy").astype(np.float32)
     n = min(len(fm), int(meta.get("seconds", 20) * fps))
-    frames = [cv2.imread(p) for p in
+    frames = [read_bgr(p) for p in
               sorted(glob.glob(f"{seq}/frames/*.png"))[:n]]
     gyro = np.array([g.gyro for g in load_imu_csv(f"{seq}/imu.csv")],
                     dtype=np.float32)
@@ -103,12 +112,12 @@ def bench(seq):
 
     # 1. DIS flow alone
     g = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames[:n_bench]]
-    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     ts = []
     for _ in range(rep):
         for t in range(1, n_bench):
             t0 = time.perf_counter()
-            dis.calc(g[t - 1], g[t], None)
+            dis_calc(dis, g[t - 1], g[t])
             ts.append((time.perf_counter() - t0) * 1e3)
     dis_ms = float(np.median(ts))
 
@@ -151,14 +160,16 @@ def bench(seq):
                     T.Normalize([0.485, 0.456, 0.406],
                                 [0.229, 0.224, 0.225])])
     with torch.no_grad():
-        x = torch.stack([tf(Image.fromarray(
-            cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)))]).to(device)
+        t_img = cast(torch.Tensor, tf(Image.fromarray(
+            cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB))))
+        x = torch.stack([t_img]).to(device)
         model(x)  # warmup
         ts = []
         for _ in range(rep):
             for t in range(n_bench):
-                x = torch.stack([tf(Image.fromarray(
-                    cv2.cvtColor(frames[t], cv2.COLOR_BGR2RGB)))]).to(device)
+                t_img = cast(torch.Tensor, tf(Image.fromarray(
+                    cv2.cvtColor(frames[t], cv2.COLOR_BGR2RGB))))
+                x = torch.stack([t_img]).to(device)
                 t0 = time.perf_counter()
                 model(x)
                 if device == "mps":

@@ -19,6 +19,7 @@ import torch
 import torchvision
 import torchvision.transforms as T
 from PIL import Image
+from typing import cast
 
 
 def event_mask(events, n, fps):
@@ -54,8 +55,9 @@ def main():
         feats = np.zeros((n, 576), dtype=np.float16)
         for i in range(0, n, args.batch):
             batch = frames[i:i + args.batch]
-            x = torch.stack([tf(Image.open(p).convert("RGB"))
-                             for p in batch]).to(device)
+            imgs = [cast(torch.Tensor, tf(Image.open(p).convert("RGB")))
+                    for p in batch]
+            x = torch.stack(imgs).to(device)
             f = model(x).mean(dim=(2, 3))          # global pool -> (B, 576)
             feats[i:i + len(batch)] = f.cpu().numpy().astype(np.float16)
         np.save(feat_path, feats)

@@ -112,7 +112,7 @@ def compensate_rotation(prev_gray: np.ndarray | None, gray: np.ndarray,
     f = w / (2.0 * np.tan(np.radians(fov_deg) / 2.0))
     dx = -f * np.tan(np.radians(gyro[1]) * dt)   # yaw   -> x shift
     dy = -f * np.tan(np.radians(gyro[0]) * dt)   # pitch -> y shift
-    M = np.float32([[1, 0, dx], [0, 1, dy]])
+    M = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
     warped = cv2.warpAffine(prev_gray, M, (w, h),
                             flags=cv2.INTER_LINEAR,
                             borderMode=cv2.BORDER_REPLICATE)

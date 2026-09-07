@@ -63,9 +63,9 @@ class FeatureMapCancel:
         self.reset_online()
 
     def reset_online(self):
-        self.F_prev = None
-        self.mu = None
-        self.var = None
+        self.F_prev: np.ndarray | None = None
+        self.mu: np.ndarray | None = None
+        self.var: np.ndarray | None = None
         self.n = 0
 
     def step(self, F: np.ndarray, gyro: np.ndarray) -> dict:
@@ -83,6 +83,7 @@ class FeatureMapCancel:
         if self.mu is None:
             self.mu = np.zeros_like(err)
             self.var = np.ones_like(err)
+        assert self.mu is not None and self.var is not None
         sd = np.sqrt(self.var) + 1e-3
         z = err / sd
         b = self.cfg.border

@@ -73,7 +73,6 @@ def main():
 
     rng = np.random.default_rng(2)
     events = []
-    taken = set()
     while len(events) < args.n_events:
         t0 = rng.uniform(5, args.seconds - 5)
         if any(abs(t0 - e[0]) < 6 for e in events):
@@ -93,7 +92,7 @@ def main():
     dys = f * np.tan(np.radians(rate[:, 0]) / FPS)
     cum = np.stack([np.cumsum(dxs), np.cumsum(dys)], axis=1).astype(np.float32)
     for i in range(n):
-        M = np.float32([[1, 0, -cum[i, 0]], [0, 1, -cum[i, 1]]])
+        M = np.array([[1, 0, -cum[i, 0]], [0, 1, -cum[i, 1]]], dtype=np.float32)
         frame = cv2.warpAffine(bg, M, (W, H), borderMode=cv2.BORDER_REFLECT)
         # illumination drift (slow, global — should be absorbed by neg image)
         frame = cv2.convertScaleAbs(frame, alpha=1.0,

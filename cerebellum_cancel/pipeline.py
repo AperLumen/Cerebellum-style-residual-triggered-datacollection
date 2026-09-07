@@ -13,8 +13,8 @@ from .io import VideoStream, cells_of, compensate_rotation, gyro_at, load_imu_cs
 @dataclass
 class PipelineResult:
     clips: list[tuple[float, float]] = field(default_factory=list)
-    surprise: np.ndarray = None            # (N,) frame-level surprise
-    surprise_std: np.ndarray = None        # (N,)
+    surprise: np.ndarray | None = None      # (N,) frame-level surprise
+    surprise_std: np.ndarray | None = None  # (N,)
     mean_cell_residual: float = 0.0
     n_frames: int = 0
 

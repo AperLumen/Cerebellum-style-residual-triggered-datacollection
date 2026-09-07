@@ -16,7 +16,7 @@ The host backbone is untouched: the adapter wraps its features.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -58,7 +58,7 @@ def action_features(gyro_row: np.ndarray) -> np.ndarray:
 def fit_slow_weights(granules: np.ndarray, targets: np.ndarray,
                      ridge: float) -> np.ndarray:
     """Ridge regression for W_slow: granules (N, G) -> targets (N, D)."""
-    G, D = granules.shape[1], targets.shape[1]
+    G = granules.shape[1]
     A = granules.T @ granules + ridge * np.eye(G)
     return np.linalg.solve(A, granules.T @ targets).astype(np.float32)
 
@@ -68,7 +68,7 @@ class CerebellumAdapter:
                  w_slow: np.ndarray | None, use_fast: bool):
         self.cfg = cfg
         self.granule = granule
-        self.w_slow = w_slow if w_slow is not None else 0.0
+        self.w_slow: np.ndarray | float = w_slow if w_slow is not None else 0.0
         self.use_fast = use_fast
         self.reset_online()
 
@@ -79,7 +79,7 @@ class CerebellumAdapter:
         self.resid_var = np.ones(D, dtype=np.float32)
         self.n = 0
 
-    def predict(self, feat_prev, gyro) -> np.ndarray:
+    def predict(self, feat_prev, gyro) -> tuple[np.ndarray, np.ndarray]:
         phi = self.granule(feat_prev, action_features(gyro))
         w = self.w_slow + (self.w_fast if self.use_fast else 0.0)
         return phi @ w, phi
@@ -160,13 +160,13 @@ class MLPHead:
         import torch
         self._torch = torch
         g = torch.Generator().manual_seed(seed)
-        self.net = torch.nn.Sequential(
-            torch.nn.Linear(dim, hidden), torch.nn.ReLU(),
-            torch.nn.Linear(hidden, 1))
+        lin_in = torch.nn.Linear(dim, hidden)
+        lin_out = torch.nn.Linear(hidden, 1)
+        self.net = torch.nn.Sequential(lin_in, torch.nn.ReLU(), lin_out)
         with torch.no_grad():
-            for layer in (self.net[0], self.net[2]):
+            for layer in (lin_in, lin_out):
                 layer.weight.copy_(0.01 * torch.randn(
-                    layer.weight.shape, generator=g))
+                    *layer.weight.shape, generator=g))
                 layer.bias.zero_()
         self.opt = torch.optim.Adam(self.net.parameters(), lr=1e-3)
         self.l2 = l2

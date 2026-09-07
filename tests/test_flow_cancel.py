@@ -35,7 +35,9 @@ def test_flow_warp_cancels_translation_better_than_naive():
     canc.step(fmap.astype(np.float32), base_img.astype(np.uint8))
     out = canc.step(moved_fmap.astype(np.float32),
                     moved_img.astype(np.uint8))
-    sd = np.sqrt(canc.var) + 1e-3
+    var = canc.var
+    assert var is not None
+    sd = np.sqrt(var) + 1e-3
     flow_resid = float(np.abs(out["z"] * sd).mean())
 
     naive = np.abs(moved_fmap - fmap).mean()

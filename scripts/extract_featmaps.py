@@ -22,6 +22,7 @@ import torch
 import torchvision
 import torchvision.transforms as T
 from PIL import Image
+from typing import cast
 
 warnings.filterwarnings("ignore", message=".*encountered in matmul")
 
@@ -51,8 +52,9 @@ def main():
         fmaps = np.zeros((n, 24, 28, 28), dtype=np.float16)
         for i in range(0, n, args.batch):
             batch = frames[i:i + args.batch]
-            x = torch.stack([tf(Image.open(p).convert("RGB"))
-                             for p in batch]).to(device)
+            imgs = [cast(torch.Tensor, tf(Image.open(p).convert("RGB")))
+                    for p in batch]
+            x = torch.stack(imgs).to(device)
             f = model(x)                        # (B, 24, 28, 28)
             fmaps[i:i + len(batch)] = f.cpu().numpy().astype(np.float16)
         np.save(out_path, fmaps)

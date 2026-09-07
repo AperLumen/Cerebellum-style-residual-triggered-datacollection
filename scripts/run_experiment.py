@@ -71,6 +71,7 @@ def main():
               f"{r.stored_fraction:>9.3f}{r.n_clips:>7}")
 
     import numpy as np
+    assert result.surprise is not None   # run_pipeline always fills the trace
     np.save(f"{args.dir}/surprise.npy", result.surprise)
     with open(f"{args.dir}/clips_cerebellum.json", "w") as fp:
         json.dump(result.clips, fp)

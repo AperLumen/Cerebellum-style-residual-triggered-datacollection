@@ -130,9 +130,8 @@ def _run_adaptive(base, noise_sd, spike, n_calm=300, n_spike=10):
     scores = np.concatenate([rng.normal(base, noise_sd, n_calm),
                              np.full(n_spike, spike),
                              rng.normal(base, noise_sd, 100)])
-    on = False
     for i, s in enumerate(scores):
-        on = tr.update(i / 30, float(s), 30.0)
+        tr.update(i / 30, float(s), 30.0)
     tr.finalize(len(scores) / 30)
     return tr
 

@@ -11,7 +11,8 @@ event regions (a moving blob has no stable texture to track).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -26,12 +27,20 @@ class FlowWarpConfig:
     warmup: int = 10
 
 
+def dis_calc(dis: cv2.DISOpticalFlow, gray_prev: np.ndarray,
+             gray: np.ndarray) -> np.ndarray:
+    """Dense DIS flow (H, W, 2) between a gray pair, no initial-flow prior.
+    Isolated in one place because the cv2 stub types the optional `flow`
+    argument as mandatory; the DIS runtime accepts None."""
+    return cast(np.ndarray, dis.calc(gray_prev, gray, cast(Any, None)))
+
+
 def dis_flow_warp(dis, F_prev: np.ndarray, gray_prev: np.ndarray,
                   gray: np.ndarray) -> np.ndarray:
     """Predict F_t by warping F_{t-1} along dense DIS flow estimated from the
     raw frame pair. Module-level so both the always-on baseline
     (FlowWarpCancel) and the on-demand arbiter can share it."""
-    flow = dis.calc(gray_prev, gray, None)                 # (H,W,2) px
+    flow = dis_calc(dis, gray_prev, gray)                  # (H,W,2) px
     c, mh, mw = F_prev.shape
     fh, fw = gray.shape
     flow = cv2.resize(flow, (mw, mh),
@@ -67,19 +76,19 @@ class FlowWarpCancel:
 
     def __init__(self, cfg: FlowWarpConfig):
         self.cfg = cfg
-        self.dis = cv2.DISOpticalFlow_create(
+        self.dis = cv2.DISOpticalFlow.create(
             cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.reset_online()
 
     def reset_online(self):
-        self.F_prev = None
-        self.gray_prev = None
-        self.mu = None
-        self.var = None
+        self.F_prev: np.ndarray | None = None
+        self.gray_prev: np.ndarray | None = None
+        self.mu: np.ndarray | None = None
+        self.var: np.ndarray | None = None
         self.n = 0
 
     def predict(self, F: np.ndarray, gray: np.ndarray) -> np.ndarray:
-        if self.F_prev is None:
+        if self.F_prev is None or self.gray_prev is None:
             return F
         return dis_flow_warp(self.dis, self.F_prev, self.gray_prev, gray)
 
@@ -94,6 +103,7 @@ class FlowWarpCancel:
         if self.mu is None:
             self.mu = np.zeros_like(err)
             self.var = np.ones_like(err)
+        assert self.mu is not None and self.var is not None
         sd = np.sqrt(self.var) + 1e-3
         z = err / sd
         b = self.cfg.border

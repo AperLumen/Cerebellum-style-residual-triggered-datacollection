@@ -64,7 +64,7 @@ def render_sequence(out_dir: str, seed: int, seconds: float,
     os.makedirs(frames_dir, exist_ok=True)
     imu_lines = ["time,gyroscope.x,gyroscope.y,gyroscope.z"]
     for i in range(n):
-        M = np.float32([[1, 0, -cum[i, 0]], [0, 1, -cum[i, 1]]])
+        M = np.array([[1, 0, -cum[i, 0]], [0, 1, -cum[i, 1]]], dtype=np.float32)
         frame = cv2.warpAffine(bg, M, (W, H), borderMode=cv2.BORDER_REFLECT)
         frame = cv2.convertScaleAbs(
             frame, alpha=1.0, beta=illum_amp * np.sin(2 * np.pi * illum_f * i / FPS))
