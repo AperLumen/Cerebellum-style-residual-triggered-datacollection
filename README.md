@@ -1,5 +1,7 @@
 # Cerebellum-style residual-triggered data collection
 
+[English](README.md) | [中文](README.zh.md)
+
 A minimal prototype of the idea discussed from Perks et al. (Nature 2026,
 doi:10.1038/s41586-026-10690-6): **a camera+IMU rig should not store what it
 can predict**. The pipeline learns a "negative image" of the sensory
@@ -293,6 +295,63 @@ Reproduce:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/train_downstream.py data/dataset
+```
+
+## Optical-flow baseline and cost profile
+
+The CV-native alternative to the gyro warp is dense optical flow: compensate
+with what the image content itself says, no IMU needed. Measured end-to-end
+on this benchmark (`cerebellum_cancel/flow_cancel.py`, DIS preset MEDIUM;
+15 train + 5 val sequences):
+
+```
+                    calm residual (mean |err|)     stored   evRec
+                    train (1x)   val (3x)          val(3x)  val(3x)
+naive (no warp)        0.093        0.221            --       --
+gyro warp              0.079        0.129           0.113    0.30
+DIS flow warp          0.070        0.103           0.192    0.33
+```
+
+Median per-frame latency on this machine (320x240 frames, 24x28x28 maps):
+
+```
+stage                     ms/frame
+gyro shift (24x28x28)      0.032
+pixel pipeline core        0.171   (warp + cells + plasticity + trigger)
+frozen backbone fwd        0.827   (MobileNetV3 features[:3], 224x2, MPS)
+DIS flow (320x240)         3.813
+full flow-cancel step      4.456
+```
+
+Takeaways:
+
+1. **Flow does buy residual quality** — 11% lower calm residual than the
+   gyro warp at 1x, 20% at 3x (DIS tracks the actual content displacement,
+   including what the gyro approximation misses). This is real, and the
+   largest honest advantage of the flow baseline.
+2. **It costs 26x the entire pixel pipeline** (4.5 ms vs 0.17 ms per frame,
+   ~120x at the warp step alone) — on a 30 fps budget the pixel pipeline
+   uses 0.5% of the frame time, the flow step 13%. And these timings are on
+   a laptop; on-device (phone CPU, no MPS) DIS is typically several times
+   slower still.
+3. **It needs texture and stability**: DIS loses the target under fast
+   motion (one 3x val sequence stores 59% of the stream vs gyro's 13% —
+   flow noise reads as surprise) and has no answer for textureless or
+   low-light patches, where the gyro warp is unaffected. Event regions
+   corrupt the local flow field, leaking into the residual.
+4. **Architecture reading**: the gyro warp is a ~30 µs matrix op that
+   turns the IMU into a corollary discharge; flow is a per-frame computer
+   vision computation that must run before the compensation it feeds. For
+   a rig whose whole point is *cheap always-on* surprisingness, the IMU is
+   the right layer — flow is the quality ceiling to compare against, and
+   the residual-quality gap (11-20%) is the honest price of the 100x
+   cost ratio. A sub-pixel gyro shift and a better f_map calibration would
+   close part of that gap.
+
+Reproduce:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/dataset
 ```
 
 ## Honest limitations
