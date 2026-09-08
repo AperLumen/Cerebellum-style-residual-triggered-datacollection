@@ -6,7 +6,7 @@
     "README.md",
     "README.zh.md"
   ],
-  "updated": "2026-09-07",
+  "updated": "2026-09-08",
   "datasets": [
     {
       "path": "data/dataset",
@@ -148,6 +148,18 @@
       "producer": "scripts/train_downstream.py",
       "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
       "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
+    },
+    {
+      "path": "runs/detection_synth_results.json",
+      "producer": "scripts/train_detection_synth.py",
+      "note": "detection-grade downstream on the synthetic rig (roadmap item 1): CenterNet-style heatmap head on frozen featmaps, VOC-style detection AP vs exact bbox GT from make_dataset.py, 20 seeds. Diagnosis (no rig bug; frozen-feature bottleneck): scripts/diag_detection_rig.py, scripts/diag_upper_bound.py, runs/diag_*.png.",
+      "headline": "NEGATIVE: cerebellum (3.4% stored) detAP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003 — all noise-level, 1-sigma overlapping. Perfect-prediction eval gives AP=1.0 (regression test), so the null is the bottleneck: MobileNetV3 features[:3] does not encode the flat blobs (full-data upper bound: train AP 0.56 / val 0.003; in-distribution train-on-val ceiling 0.415)."
+    },
+    {
+      "path": "runs/acquisition_demo.json",
+      "producer": "scripts/demo_acquisition.py",
+      "note": "protocol-layer demo (roadmap item 3): AcquisitionLayer driving real webcam capture (1950 frames, robust stats), residual heatmap overlay at runs/acquisition_demo_peak.png.",
+      "headline": "keep 6 clips, frame-level storage 14.4%, surprise peak-frame residual heatmap confirms hair-motion region; robust stat profile consistent with the 22-segment cross-scene conclusion."
     },
     {
       "path": "runs/arbiter_eval.json",

@@ -2,10 +2,7 @@
 
 > 本文档是项目的整体指南，自包含：只发这一个 MD 文件，读者即可了解**为什么做这个方向**（§0.1–0.3）、**怎么做、成本多少**（§1）、**一篇 Nature 论文如何被拆成一串可证伪的工程问题及目前的答案**（§2）、以及这套思路的跨学科来源与边界（§3）。
 >
->
 > 所有数字为实测值；[manifest.json](manifest.json) 里的 JSON 链接只是深度复现索引（结果文件不入 git），精确复现命令在 [README.md](README.md) / [README.zh.md](README.zh.md)。
-
----
 
 ## 目录
 
@@ -66,23 +63,23 @@
 
 （✅ 成立 / ⚠️ 部分成立或带保留 / ❌ 实测不成立；详表与复现命令见 §2.3 各节）
 
-| #  | 实验                                                                               | 核心数字                                                                                                                                            | 状态 |
-| -- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| 1  | 合成下游训练对比（headline）                                                       | cerebellum 3.4% 存储 → val AP 0.298 / evRec@10 0.96；uniform 4x 预算（51% 存储）AP 0.145；oracle（1.9%）AP 0.191 / recall 0.72                     | ✅   |
-| 2  | 成本画像                                                                           | gyro shift 0.032 ms + 像素管线 0.171 ms/帧（DIS 光流 3.8 ms、完整 flow 步 4.5 ms，~26 倍差）；backbone 前向 0.83 ms（MPS）/ 1.76 ms（CPU）          | ✅   |
-| 3  | 分辨率扫描（合成 224/336/448）                                                     | gyro 收益 -41% / -52% / -58%，单调未饱和；质量三档精确复现（10× 重测 max diff 0.0）                                                                | ✅   |
-| 4  | 光流上限与 RAFT 对照                                                               | 合成 val：DIS 0.1056 ≈ RAFT 0.1054；真实高运动：DIS 0.0522 vs RAFT 0.0544；RAFT 慢 ~20 倍——上限与估计器无关                                      | ✅   |
-| 5  | CPU/MPS 可移植性                                                                   | 特征最大相对差 2e-6，下游残差差 3.7e-9；CPU 仅慢 1.7 倍                                                                                             | ✅   |
-| 6  | 真实桌面 12 段（Open-AoE）触发                                                     | robust 统计恢复触发：stored 中位 9.2%、事件 recall 中位 0.46；但自运动亚像素，gyro warp 物理中性                                                    | ⚠️ |
-| 7  | 高运动真实对（p95 yaw 31–52°/s）                                                 | gyro warp 比 naive 差（0.080 → 0.090）；DIS 光流质量胜（0.052）成本败（8.4 ms vs 0.033 ms）                                                        | ⚠️ |
-| 8  | 448px 真实交叉                                                                     | 合成设计规则不迁移：gyro 仍帮倒忙（+15%），光流逐段翻转——分辨率修估计器误差、修不了模型类误差                                                     | ❌   |
-| 9  | 平移建模（常深度）                                                                 | gyro+trans 0.0938 vs 纯旋转 0.0901——深度结构化场景下均匀平移模型类是错的                                                                          | ❌   |
-| 10 | 真实数据下游价值（9 类动词分类，12 段 3-fold CV × 35 seed = 105 轮/方法）         | cerebellum（16% 存储）mAP 0.162±0.077 vs uniform 1x 0.173±0.082、oracle（13%）0.164±0.088——全部 1σ 内重合；单 split 旧版（0.197）被本行取代   | ❌   |
-| 11 | 稀疏物理事件 regime 检验（10 段 drop/throw/toss/break 含高运动段 gyro p95 23–75°/s，LOO×25 seed = 250 轮/方法） | cerebellum（23.4% 存储）AP 0.108±0.094 ≈ uniform 1x（23.6%）0.104±0.084；oracle（7.9%）0.144±0.128 最优但优势收窄（5 段时 0.204）——主场假设确认不成立，且真值事件帧本身判别价值有限 | ❌ |
-| 12 | z 图读出端升级（幅度/空间金字塔/拼接 backbone，250 轮/格） | zamp 三种存储方法 AP 逐位相同（0.129±0.098）= 零信号；zpyr ≈ zamp；feat+zpyr ≈ feat——z 图幅度与空间模式都不携带事件信息，"运动预测"框架最后的价值出口关闭 | ❌ |
-| 13 | 行走级 4 段 gyro 价值（field/kitchen/balcony/多房间，gyro p95 71–75°/s） | gyro warp 比 naive 差 3/4 段（mean calm 0.143 → 0.158，+11%）；flow 质量全胜（0.105，−26%）成本败（8.5 ms vs 0.033 ms）——"运动越大副本越值钱"证伪：运动越大模型类误差和 SLAM 副本退化越严重 | ❌ |
-| 14 | 光流仲裁级联 | 机制与成本验证（摊销 0.15–0.9 ms/帧，保留否决权）；价值待真实失效模式兑现 | ⚠️ |
-| 15 | iPhone 真 gyro 通路 | 未验证（SLAM 轨迹是替身；排期不急） | ⬜ |
+| #  | 实验                                                                                                               | 核心数字                                                                                                                                                                                        | 状态 |
+| -- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| 1  | 合成下游训练对比（headline）                                                                                       | cerebellum 3.4% 存储 → val AP 0.298 / evRec@10 0.96；uniform 4x 预算（51% 存储）AP 0.145；oracle（1.9%）AP 0.191 / recall 0.72                                                                 | ✅   |
+| 2  | 成本画像                                                                                                           | gyro shift 0.032 ms + 像素管线 0.171 ms/帧（DIS 光流 3.8 ms、完整 flow 步 4.5 ms，~26 倍差）；backbone 前向 0.83 ms（MPS）/ 1.76 ms（CPU）                                                      | ✅   |
+| 3  | 分辨率扫描（合成 224/336/448）                                                                                     | gyro 收益 -41% / -52% / -58%，单调未饱和；质量三档精确复现（10× 重测 max diff 0.0）                                                                                                            | ✅   |
+| 4  | 光流上限与 RAFT 对照                                                                                               | 合成 val：DIS 0.1056 ≈ RAFT 0.1054；真实高运动：DIS 0.0522 vs RAFT 0.0544；RAFT 慢 ~20 倍——上限与估计器无关                                                                                  | ✅   |
+| 5  | CPU/MPS 可移植性                                                                                                   | 特征最大相对差 2e-6，下游残差差 3.7e-9；CPU 仅慢 1.7 倍                                                                                                                                         | ✅   |
+| 6  | 真实桌面 12 段（Open-AoE）触发                                                                                     | robust 统计恢复触发：stored 中位 9.2%、事件 recall 中位 0.46；但自运动亚像素，gyro warp 物理中性                                                                                                | ⚠️ |
+| 7  | 高运动真实对（p95 yaw 31–52°/s）                                                                                 | gyro warp 比 naive 差（0.080 → 0.090）；DIS 光流质量胜（0.052）成本败（8.4 ms vs 0.033 ms）                                                                                                    | ⚠️ |
+| 8  | 448px 真实交叉                                                                                                     | 合成设计规则不迁移：gyro 仍帮倒忙（+15%），光流逐段翻转——分辨率修估计器误差、修不了模型类误差                                                                                                 | ❌   |
+| 9  | 平移建模（常深度）                                                                                                 | gyro+trans 0.0938 vs 纯旋转 0.0901——深度结构化场景下均匀平移模型类是错的                                                                                                                      | ❌   |
+| 10 | 真实数据下游价值（9 类动词分类，12 段 3-fold CV × 35 seed = 105 轮/方法）                                         | cerebellum（16% 存储）mAP 0.162±0.077 vs uniform 1x 0.173±0.082、oracle（13%）0.164±0.088——全部 1σ 内重合；单 split 旧版（0.197）被本行取代                                               | ❌   |
+| 11 | 稀疏物理事件 regime 检验（10 段 drop/throw/toss/break 含高运动段 gyro p95 23–75°/s，LOO×25 seed = 250 轮/方法） | cerebellum（23.4% 存储）AP 0.108±0.094 ≈ uniform 1x（23.6%）0.104±0.084；oracle（7.9%）0.144±0.128 最优但优势收窄（5 段时 0.204）——主场假设确认不成立，且真值事件帧本身判别价值有限       | ❌   |
+| 12 | z 图读出端升级（幅度/空间金字塔/拼接 backbone，250 轮/格）                                                         | zamp 三种存储方法 AP 逐位相同（0.129±0.098）= 零信号；zpyr ≈ zamp；feat+zpyr ≈ feat——z 图幅度与空间模式都不携带事件信息，"运动预测"框架最后的价值出口关闭                                  | ❌   |
+| 13 | 行走级 4 段 gyro 价值（field/kitchen/balcony/多房间，gyro p95 71–75°/s）                                         | gyro warp 比 naive 差 3/4 段（mean calm 0.143 → 0.158，+11%）；flow 质量全胜（0.105，−26%）成本败（8.5 ms vs 0.033 ms）——"运动越大副本越值钱"证伪：运动越大模型类误差和 SLAM 副本退化越严重 | ❌   |
+| 14 | 光流仲裁级联                                                                                                       | 机制与成本验证（摊销 0.15–0.9 ms/帧，保留否决权）；价值待真实失效模式兑现                                                                                                                      | ⚠️ |
+| 15 | iPhone 真 gyro 通路                                                                                                | 未验证（SLAM 轨迹是替身；排期不急）                                                                                                                                                             | ⬜   |
 
 ### 0.5 怎么读这张表
 
@@ -303,14 +300,14 @@ RAFT 与 DIS 打平（合成）或略差（真实），慢 ~20 倍——"flow �
 
 **③ 扩到 10 段（含高运动）重测——结论钉死（250 轮/方法）。** 按事件动词筛选 + 运动下限（gyro p95 23–75°/s，纠正旧 5 段全桌面级的缺陷）+ 场景多样性（kitchen/garden/warehouse/outdoor）新采 5 段（`scripts/select_event_segments.py` 从 260 个已 probe 段中选取），10 段 LOO × 25 seed = **250 轮/方法**：
 
-| 方法 | 存储占比 | val AP | evRec@10% |
-|---|---|---|---|
-| cerebellum | 0.234 | 0.108±0.094 | 0.65±0.35 |
-| uniform 0.5x（半数字节） | 0.121 | 0.105±0.082 | 0.60±0.34 |
-| uniform 1x | 0.236 | 0.104±0.084 | 0.61±0.34 |
-| uniform 2x | 0.280 | 0.108±0.085 | 0.64±0.34 |
-| uniform 4x | 0.362 | 0.109±0.085 | 0.62±0.34 |
-| oracle（真值重要性，更少存储） | 0.079 | 0.144±0.128 | 0.63±0.35 |
+| 方法                           | 存储占比 | val AP       | evRec@10%  |
+| ------------------------------ | -------- | ------------ | ---------- |
+| cerebellum                     | 0.234    | 0.108±0.094 | 0.65±0.35 |
+| uniform 0.5x（半数字节）       | 0.121    | 0.105±0.082 | 0.60±0.34 |
+| uniform 1x                     | 0.236    | 0.104±0.084 | 0.61±0.34 |
+| uniform 2x                     | 0.280    | 0.108±0.085 | 0.64±0.34 |
+| uniform 4x                     | 0.362    | 0.109±0.085 | 0.62±0.34 |
+| oracle（真值重要性，更少存储） | 0.079    | 0.144±0.128 | 0.63±0.35 |
 
 cerebellum 与 uniform 1x 依旧打平（0.108 vs 0.104）；oracle 仍最优但优势从 5 段时的 +0.070 收窄到 +0.036 且 evRec 不再领先——**场景一多样，连真值事件帧的判别价值都变小**：这个 binary 任务的上限本来就不高（粗标注区间 + 帧级二值），"oracle 有效"部分是 5 段小样本的产物。
 
@@ -318,11 +315,11 @@ cerebellum 与 uniform 1x 依旧打平（0.108 vs 0.104）；oracle 仍最优但
 
 **④ 读出端升级——负结果，框架内最后的出口关闭（`scripts/train_downstream_event_zreadout.py`，250 轮/格）。** 既然幅度不携带事件信息，最后的问题是 z 图的**空间模式**是否携带。在同一 10 段 LOO × 25 seed 协议上对比四种读出：zamp（z² 全局幅度，1 维）、zpyr（z² 图空间金字塔 1+4+16=21 维）、feat（576 维 backbone，基线）、feat+zpyr（拼接）。结果：
 
-| 读出 | cerebellum | uniform(1x) | oracle |
-|---|---|---|---|
-| zamp | 0.129±0.098 | 0.129±0.098 | 0.129±0.098 |
-| zpyr | 0.126±0.095 | 0.126±0.094 | 0.132±0.100 |
-| feat | 0.108±0.094 | 0.104±0.084 | 0.144±0.128 |
+| 读出      | cerebellum   | uniform(1x)  | oracle       |
+| --------- | ------------ | ------------ | ------------ |
+| zamp      | 0.129±0.098 | 0.129±0.098 | 0.129±0.098 |
+| zpyr      | 0.126±0.095 | 0.126±0.094 | 0.132±0.100 |
+| feat      | 0.108±0.094 | 0.104±0.084 | 0.144±0.128 |
 | feat+zpyr | 0.126±0.097 | 0.118±0.096 | 0.135±0.109 |
 
 决定性证据是 zamp 行：**三种存储方法下 AP 逐位相同**——这不是巧合，是逻辑回归在零信号特征上学到零权重，AP 退化为验证集事件率的常数预测。zpyr 不优于 zamp（空间模式无信息）；feat+zpyr ≈ feat（对 backbone 零补充）；z 读出的高 evRec（0.84–0.87）只是"全场高分 + 10% 预算"的假象。**残差图（幅度与空间模式）在真实 egocentric 数据上不携带事件判别信息**——"把运动预测做得更准、把残差读得更巧"这条路线至此全部关闭，触发器产出的信号在真实数据上只能回答"哪里动了"，回答不了"发生了什么"。
@@ -431,6 +428,7 @@ cerebellum 与 uniform 1x 依旧打平（0.108 vs 0.104）；oracle 仍最优但
 - `runs/downstream_aoe_results.json` — 真实数据下游价值旧版（`scripts/train_downstream_aoe.py`，9 段单 split）：合成优势未迁移；已被 `runs/downstream_aoe_cv.json` 的 105 轮版本取代
 - `runs/downstream_aoe_cv.json` — 真实数据下游价值稳健版（`scripts/run_downstream_aoe_cv.py`，12 段 3-fold × 35 seed = 105 轮/方法，9 类动词）：cerebellum 0.162±0.077 vs uniform 1x 0.173±0.082 vs oracle 0.164±0.088，全部 1σ 重合——"未迁移"有统计支撑
 - `runs/downstream_event_results.json` — 稀疏物理事件 regime 检验（`scripts/train_downstream_event.py`，5 段 drop/throw/toss/break，LOO × 25 seed = 125 轮/方法）：oracle（12.4% 存储）0.204±0.149 明显最优，cerebellum（43.4%）与 uniform 1x 打平——主场 regime 假设未确认（§2.3.7）
+- `runs/detection_synth_results.json` — 检测级下游对比（`scripts/train_detection_synth.py`，CenterNet 风格热点头 + 检测 AP，20 seeds）：cerebellum 3.4% 存储 AP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003，全方法噪声级且 1σ 重合——评估经完美预测 AP=1.0 回归守住（`tests/test_detection_synth.py`），根因是冻结特征瓶颈：MobileNetV3 `features[:3]` 对平坦 blob 几乎无响应（`scripts/diag_detection_rig.py` / `scripts/diag_upper_bound.py`，图 `runs/diag_*.png`；全量 24k 帧上界 train AP 0.56 / val 0.003，同分布 train-on-val ceiling 仅 0.415）。检测级信号在 features[:3] 下不存在，backbone 替换（路线图项 2）优先级上调
 - `runs/raft_eval_data_dataset_val.json` / `runs/raft_eval_data_aoe_motion_val.json` — RAFT 光流上限对照（`scripts/run_raft_eval.py`）：合成 val 5 段 RAFT 0.1054 ≈ DIS 0.1056；真实高运动 2 段 RAFT 0.0544 vs DIS 0.0522；RAFT 慢 ~20 倍
 - `runs/portable_check.json` — CPU vs MPS 可移植性（`scripts/run_portable_check.py`）：特征最大相对差 2e-6、下游残差差 3.7e-9；backbone 1.76 ms (CPU) vs 1.06 ms (MPS)
 - `runs/flow_eval_motion.json` — 真实高运动 224px（naive 0.080 / gyro 0.090 / flow 0.052）；`runs/flow_eval_motion448.json` — 同对片段 448px 交叉（0.0535 / 0.0614 / 0.0684，设计规则未迁移）；`runs/flow_eval_synth448.json` — 合成 448px（分辨率收益 -58% 的参照）；`runs/flow_eval_event.json` — 事件 5 段质量基线（DIS 8.18 ms、gyro shift 0.033 ms、flow step 6.40 ms/帧）
@@ -453,9 +451,9 @@ cerebellum 与 uniform 1x 依旧打平（0.108 vs 0.104）；oracle 仍最优但
 
 **近期（2026-09-07 新一轮）**
 
-1. **合成 rig 升级 detection-grade**：make_dataset.py 渲染时精确知道圆/条的位置（cx, cy, radius 现成），dump bounding box 真值约 10 行；在 featmaps 上加 CenterNet 风格热点回归头，评估检测 AP。任务从"这帧有没有异常"升到"异常在哪"——合成 regime 是项目唯一站住 headline 的地方，值得从 toy 分类做成检测级，这也是成果形态上最值钱的一步。
-2. **DINOv2 冻结特征替换 MobileNetV3**：2019 年的预训练 open-set 鲁棒性有限；DINOv2 ViT-S/14 是 frozen-feature 研究的标准选择（torch hub 本地跑），patch token 可 reshape 回 2D 网格、featmap 取消路径直接复用。预期合成 headline AP 实质跳升（0.30 → 0.4+ 量级，如果上限是瓶颈）；顺带统一 1 的检测头 backbone。
-3. **协议层接口化**：把触发器包成可插拔采集层（输入帧 + IMU 流，输出存储决策 + 残差图），写一个最小集成 demo（接管一个目录/视频文件的采集决策），为并入视觉模型协议栈做工程准备——这是项目"AI 协议层"定位的 MVP 形态。
+1. **合成 rig 升级 detection-grade**——已执行（2026-09-08，负结果）：bbox 真值已入 make_dataset.py，CenterNet 风格热点头 + 自包含检测 AP（`scripts/train_detection_synth.py`），20-seed 网格（`runs/detection_synth_results.json`）cerebellum / uniform×3 / oracle 全部 detAP ≤0.015 且 1σ 重合。诊断排除实现 bug（完美预测 AP=1.0 已固化为回归测试）：根因是冻结特征瓶颈——`features[:3]` 在 gt cell 处响应 ≈ 背景（z-score +0.15~0.66），全量 24k 帧上界 train AP 0.56 / **val 0.003**，同分布 train-on-val ceiling 也仅 0.415。检测级信号在 features[:3] 下不存在，backbone 是瓶颈——项 2 的优先级由此上调。
+2. **DINOv2 冻结特征替换 MobileNetV3**：2019 年的预训练 open-set 鲁棒性有限；DINOv2 ViT-S/14 是 frozen-feature 研究的标准选择（torch hub 本地跑），patch token 可 reshape 回 2D 网格、featmap 取消路径直接复用。预期合成 headline AP 实质跳升（0.30 → 0.4+ 量级，如果上限是瓶颈）；顺带统一 1 的检测头 backbone。**项 1 的阴性结果把"上限是瓶颈"从假设变成已实测**。
+3. **协议层接口化**——已执行（2026-09-08，验收通过）：`cerebellum_cancel/acquisition.py`，`AcquisitionLayer.step(frame, gyro, t) → {keep, in_clip, surprise, z_map, clips}`，前端可插拔 callable（内置 MobileNetV3 [:3] 与现有提取管线同链），`finalize()` 返片段；`scripts/demo_acquisition.py` 真实 webcam 1950 帧：keep 6 段 / 帧级存储 14.4%，surprise 峰值帧残差热力图叠加确认头发运动区，robust 口径与文档 22 段结论一致。测试 +5（全套 49 passed），pyright 0。
 
 **中期（结构补全）**
 
@@ -470,4 +468,4 @@ cerebellum 与 uniform 1x 依旧打平（0.108 vs 0.104）；oracle 仍最优但
 
 ---
 
-*最后更新：2026-09-07。实验数字以 manifest.json 指向的最新结果文件为准；每个数字的复现命令在 README 对应章节。*
+*最后更新：2026-09-08。实验数字以 manifest.json 指向的最新结果文件为准；每个数字的复现命令在 README 对应章节。*
