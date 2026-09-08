@@ -1,7 +1,8 @@
 """Generate a multi-sequence synthetic dataset for the adapter experiments.
 Each sequence: textured scene + smooth self-rotation (+IMU) + injected
 surprise events with varied count/duration/salience. Ground truth event
-masks are exact.
+masks are exact; per-frame event bounding boxes are dumped to bboxes.json
+(xyxy pixel coords in the 320x240 frames, one list per event-active frame).
 
 Usage: .venv/bin/python scripts/make_dataset.py --n-train 40 --n-val 10 \
           --seconds 20 --out data/dataset
@@ -63,6 +64,7 @@ def render_sequence(out_dir: str, seed: int, seconds: float,
     frames_dir = f"{out_dir}/frames"
     os.makedirs(frames_dir, exist_ok=True)
     imu_lines = ["time,gyroscope.x,gyroscope.y,gyroscope.z"]
+    bboxes = {}                       # frame_idx -> [[x1, y1, x2, y2], ...]
     for i in range(n):
         M = np.array([[1, 0, -cum[i, 0]], [0, 1, -cum[i, 1]]], dtype=np.float32)
         frame = cv2.warpAffine(bg, M, (W, H), borderMode=cv2.BORDER_REFLECT)
@@ -81,12 +83,16 @@ def render_sequence(out_dir: str, seed: int, seconds: float,
                     m = np.zeros_like(frame)
                     cv2.rectangle(m, (cx - 28, cy - 6), (cx + 28, cy + 6),
                                   (255, 255, 255), -1)
+                    box = [cx - 28, cy - 6, cx + 28, cy + 6]
                 elif event_alpha >= 1.0:
                     m = None
                     cv2.circle(frame, (cx, cy), radius, (255, 255, 255), -1)
+                    box = [cx - radius, cy - radius, cx + radius, cy + radius]
                 else:
                     m = np.zeros_like(frame)
                     cv2.circle(m, (cx, cy), radius, (255, 255, 255), -1)
+                    box = [cx - radius, cy - radius, cx + radius, cy + radius]
+                bboxes.setdefault(i, []).append(box)
                 if m is not None:
                     m = m.astype(np.float32) / 255.0
                     frame = (frame.astype(np.float32) * (1 - event_alpha * m)
@@ -100,6 +106,9 @@ def render_sequence(out_dir: str, seed: int, seconds: float,
     with open(f"{out_dir}/events.json", "w") as fp:
         json.dump({"events": events, "fps": FPS, "seconds": seconds},
                   fp, indent=2)
+    with open(f"{out_dir}/bboxes.json", "w") as fp:
+        json.dump({"fps": FPS, "bboxes": {str(k): v for k, v in bboxes.items()}},
+                  fp, indent=1)
     return len(events)
 
 
