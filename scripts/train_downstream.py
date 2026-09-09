@@ -46,6 +46,9 @@ from cerebellum_cancel.featmap_cancel import (CancelConfig, FeatureMapCancel,
 from cerebellum_cancel.io import load_imu_csv
 
 CACHE = "runs/downstream_clips.json"
+FEATMAPS_NAME = "featmaps.npy"    # backbone featmaps for the trigger rollout
+                                  # (24ch 28x28 MobileNetV3 / 384ch 16x16 DINOv2)
+FEATURES_NAME = "features.npy"    # pooled per-frame features for the head
 FPS_FALLBACK = 30.0
 
 
@@ -56,11 +59,15 @@ def seq_dirs(dataset, split):
 def score_seq(seq):
     meta = json.load(open(f"{seq}/events.json"))
     fps = float(meta.get("fps", FPS_FALLBACK))
-    fm = np.load(f"{seq}/featmaps.npy").astype(np.float32)
+    fm = np.load(f"{seq}/{FEATMAPS_NAME}").astype(np.float32)
     gyro = np.array([g.gyro for g in load_imu_csv(f"{seq}/imu.csv")],
                     dtype=np.float32)
     n = min(len(fm), len(gyro))
-    canc = FeatureMapCancel(CancelConfig())
+    # f_map scales with the feature-map width: the rig's 24.25 at 28x28
+    # (224 px input, stride 8) becomes 24.25*W/28 for any other grid
+    # (DINOv2 16x16 patch grid -> 13.86). Same 224 px input, same FOV.
+    f_map = 24.25 * fm.shape[-1] / 28.0
+    canc = FeatureMapCancel(CancelConfig(f_map=f_map))
     z, _ = rollout(canc, fm[:n], gyro[:n])
     return maxcell_score(z), fps, n
 
@@ -79,9 +86,9 @@ def clips_for_score(score, fps, n, mode):
     return trig.finalize(n / fps)
 
 
-def load_or_compute_clips(dataset, modes):
-    if os.path.exists(CACHE):
-        with open(CACHE) as fp:
+def load_or_compute_clips(dataset, modes, cache_path=CACHE):
+    if os.path.exists(cache_path):
+        with open(cache_path) as fp:
             cache = json.load(fp)
         if all(all(m in cache.get(seq, {}) for m in modes)
                for seq in seq_dirs(dataset, "train")):
@@ -95,8 +102,8 @@ def load_or_compute_clips(dataset, modes):
             cache[seq][mode] = {"clips": clips, "fps": fps, "n_frames": n}
             stored = sum(b - a for a, b in clips) / (n / fps)
             print(f"  {seq} {mode}: {len(clips)} clips stored={stored:.3f}")
-    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    with open(CACHE, "w") as fp:
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "w") as fp:
         json.dump(cache, fp)
     return cache
 
@@ -167,6 +174,7 @@ def regime_check(dataset, fixed_mode):
 
 
 def main():
+    global FEATMAPS_NAME, FEATURES_NAME
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset", default="data/dataset")
     ap.add_argument("--modes", default="adaptive,T300",
@@ -176,17 +184,28 @@ def main():
                     help="downstream heads to train (comma-separated)")
     ap.add_argument("--uniform-mults", default="0.5,1,2,4",
                     help="uniform budgets as multiples of the cerebellum budget")
+    ap.add_argument("--featmaps", default=FEATMAPS_NAME,
+                    help="backbone featmaps filename (the trigger rollout "
+                         "input; featmaps_dino.npy for the DINOv2 run)")
+    ap.add_argument("--features", default=FEATURES_NAME,
+                    help="pooled per-frame features filename (the head input; "
+                         "features_dino.npy for the DINOv2 run)")
+    ap.add_argument("--clips-cache", default=CACHE,
+                    help="clip cache path (use a separate file per backbone)")
+    ap.add_argument("--out", default="runs/downstream_results.json")
     args = ap.parse_args()
     modes = args.modes.split(",")
     heads = args.heads.split(",")
     mults = [float(m) for m in args.uniform_mults.split(",")]
+    FEATMAPS_NAME = args.featmaps
+    FEATURES_NAME = args.features
 
     print("computing featmap-cancellation clips on train split (cached) ...")
-    cache = load_or_compute_clips(args.dataset, modes)
+    cache = load_or_compute_clips(args.dataset, modes, args.clips_cache)
 
     train = []
     for seq in seq_dirs(args.dataset, "train"):
-        feats = np.load(f"{seq}/features.npy").astype(np.float32)
+        feats = np.load(f"{seq}/{FEATURES_NAME}").astype(np.float32)
         labels = np.load(f"{seq}/labels.npy")
         fps = cache[seq][modes[0]]["fps"]
         seq_masks = {}
@@ -199,7 +218,7 @@ def main():
 
     val = []
     for seq in seq_dirs(args.dataset, "val"):
-        feats = np.load(f"{seq}/features.npy").astype(np.float32)
+        feats = np.load(f"{seq}/{FEATURES_NAME}").astype(np.float32)
         labels = np.load(f"{seq}/labels.npy")
         val.append((feats, labels))
 
@@ -246,7 +265,7 @@ def main():
 
     results["regime_check"] = regime_check(args.dataset, "T300")
 
-    out_path = "runs/downstream_results.json"
+    out_path = args.out
     with open(out_path, "w") as fp:
         json.dump(results, fp, indent=2)
     print(f"\nresults -> {out_path}")

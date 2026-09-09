@@ -6,7 +6,7 @@
     "README.md",
     "README.zh.md"
   ],
-  "updated": "2026-09-08",
+  "updated": "2026-09-09",
   "datasets": [
     {
       "path": "data/dataset",
@@ -160,6 +160,24 @@
       "producer": "scripts/demo_acquisition.py",
       "note": "protocol-layer demo (roadmap item 3): AcquisitionLayer driving real webcam capture (1950 frames, robust stats), residual heatmap overlay at runs/acquisition_demo_peak.png.",
       "headline": "keep 6 clips, frame-level storage 14.4%, surprise peak-frame residual heatmap confirms hair-motion region; robust stat profile consistent with the 22-segment cross-scene conclusion."
+    },
+    {
+      "path": "runs/trigger_scan_s8.json",
+      "producer": "scripts/run_trigger_scan_s8.py",
+      "note": "backbone-replacement closure (roadmap item 2): same-protocol 40-train-segment trigger scan, DINOv1 ViT-S/8 (28x28 native grid) vs MobileNetV3. S/8 features extracted online, nothing persisted. Diagnosis scripts: scripts/diag_dino_trigger*.py.",
+      "headline": "NEGATIVE: S/8 fires 3/40 segments vs MNV3 11/40. Patch tokens have sufficient event discrimination (ev99 0.27 vs 0.23) but insufficient persistence (z_ema peaks stall below gate 6). Closes the backbone route: DINOv2 S/14 unfixable in-protocol (per-channel std is identity in the residual pipeline), DINOv2 S/8 weights delisted by Meta."
+    },
+    {
+      "path": "runs/downstream_dino.json",
+      "producer": "scripts/train_downstream.py --featmaps featmaps_dino.npy",
+      "note": "DINOv2 S/14 frame-level comparison, 20-seed protocol as runs/downstream_results.json. cerebellum/oracle rows degenerate (0 stored frames — S/14 adaptive trigger fires zero clips).",
+      "headline": "Only uniform rows informative: 5.2% stored / AP 0.196 / evRec@10 0.79 (below published MNV3 cerebellum 0.298). Uniform budgets 0.5x-4x collapse to identical 1240 frames: pre-existing zero-budget floor when the cerebellum mask is empty (also affects published MNV3 rows; fix pending maintainer decision)."
+    },
+    {
+      "path": "runs/detection_synth_dino_results.json",
+      "producer": "scripts/train_detection_synth.py --featmaps featmaps_dino.npy",
+      "note": "DINOv2 S/14 detection-level grid, 20 seeds. cerebellum/oracle 0 frames stored; uniform rows detAP NaN (all-zero-peak seeds expose a pre-existing eval fragility: detection_ap returns NaN with no peaks, nanmean over all-NaN).",
+      "headline": "No informative comparison: cerebellum/oracle degenerate at 0 frames, uniform NaN. Kept as raw archive alongside runs/detection_synth_results.json (MNV3 negative)."
     },
     {
       "path": "runs/arbiter_eval.json",

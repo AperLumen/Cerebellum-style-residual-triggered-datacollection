@@ -11,8 +11,11 @@ the exact bbox ground truth dumped by make_dataset.py (bboxes.json).
 
 Design choices (kept deliberately small):
   - Head: 2x Conv(3x3) + 1x Conv(1x1), <=32 channels, on the (24,28,28)
-    featmaps, single-channel 28x28 heatmap out. The task is single-class
-    small-object center localization; no size/offset branches needed.
+    featmaps (MobileNetV3) or (384,16,16)->bilinear-28x28 (DINOv2, roadmap
+    item 2), single-channel 28x28 heatmap out. Capacity spec identical
+    across backbones; only the input channels differ. The task is
+    single-class small-object center localization; no size/offset branches
+    needed.
   - Loss: CenterNet's penalty-reduced focal (alpha=2, beta=4), not plain
     MSE: measured on this rig, MSE collapses to the all-zero heatmap (event
     frames are a small fraction of stored frames, and a near-zero prediction
@@ -40,6 +43,7 @@ Usage: PYTHONPATH=. .venv/bin/python scripts/train_detection_synth.py data/datas
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -48,6 +52,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
 from train_downstream import (clips_to_frames, load_or_compute_clips,  # noqa: E402
@@ -100,7 +105,12 @@ def boxes_to_heatmap(boxes: list[list[float]], out: int = FMAP_OUT,
 
 
 class HeatmapHead(nn.Module):
-    """CenterNet-style tiny heatmap head on frozen (24,28,28) featmaps."""
+    """CenterNet-style tiny heatmap head on frozen featmaps.
+
+    Capacity spec is fixed (2x Conv 3x3, 32 ch, 1x Conv 1x1); only `cin`
+    follows the backbone (24 for MobileNetV3 features[:3], 384 for DINOv2
+    patch tokens — loaded bilinearly upsampled to 28x28 so every other
+    dimension of the task stays identical across backbones)."""
 
     def __init__(self, cin: int = 24, ch: int = 32):
         super().__init__()
@@ -134,11 +144,11 @@ def heatmap_focal_loss(logits: torch.Tensor, targets: torch.Tensor,
 
 def train_head(x: np.ndarray, y: np.ndarray, seed: int, device: str,
                epochs: int = 40, batch: int = 128,
-               lr: float = 1e-3) -> HeatmapHead:
+               lr: float = 1e-3, cin: int = 24) -> HeatmapHead:
     """Focal-loss heatmap regression; init/shuffling derive from `seed` only."""
     torch.manual_seed(seed)
     gen = torch.Generator().manual_seed(seed)
-    model = HeatmapHead().to(device)
+    model = HeatmapHead(cin=cin).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     xt = torch.from_numpy(x).to(device)        # (N,24,28,28) float16
     yt = torch.from_numpy(y).to(device)        # (N,28,28) float32
@@ -233,12 +243,74 @@ def eval_detection(model: nn.Module, seqs: list[tuple[np.ndarray, dict]],
 # --------------------------------------------------------------------- main
 
 
-def load_split(dataset: str, split: str):
-    """-> list of (seq_dir, featmaps float16 (n,24,28,28),
-    heatmaps float32 (n,28,28), event-frame indicator bool (n,), bboxes)."""
+@torch.no_grad()
+def save_example_figure(model: nn.Module, val_rows: list, device: str,
+                        path: str, n_frames: int = 3) -> None:
+    """Panel figure (PIL, like scripts/diag_upper_bound.py — no matplotlib
+    dependency): val event frames with the raw image, the gt heatmap and
+    the head's predicted probability heatmap (the residual/prediction
+    comparison for the detection-level run). Heatmaps use a 'hot' ramp."""
+    model.eval()
+    for seq, fm, heat, ev, bboxes in val_rows:
+        idxs = np.where(ev)[0]
+        if len(idxs) == 0:
+            continue
+        pick = idxs[np.linspace(0, len(idxs) - 1,
+                                min(n_frames, len(idxs))).astype(int)]
+        frames = sorted(glob.glob(f"{seq}/frames/*.png"))
+        xt = torch.from_numpy(fm[pick]).to(device)
+        prob = torch.sigmoid(model(xt.float())).cpu().numpy()
+
+        def hot(hm: np.ndarray, marks: list[tuple[float, float]] = []) -> np.ndarray:
+            t = np.clip(hm, 0, 1)
+            rgb = np.stack([np.clip(3 * t, 0, 1), np.clip(3 * t - 1, 0, 1),
+                            np.clip(3 * t - 2, 0, 1)], axis=-1)
+            img = (rgb * 255).astype(np.uint8)
+            img = np.array(Image.fromarray(img).resize(
+                (FMAP_OUT * 8, FMAP_OUT * 6), Image.Resampling.NEAREST))
+            for cx, cy in marks:            # gt centers as cyan '+'
+                x, y = int(round(cx * 8 + 3)), int(round(cy * 6 + 3))
+                for d in range(-6, 7):
+                    for xx, yy in ((x + d, y), (x, y + d)):
+                        if 0 <= xx < img.shape[1] and 0 <= yy < img.shape[0]:
+                            img[yy, xx] = (0, 255, 255)
+            return img
+
+        rows = []
+        for r, fi in enumerate(pick):
+            img = np.array(Image.open(frames[fi]).convert("RGB")
+                           .resize((FMAP_OUT * 8, FMAP_OUT * 6)))
+            marks = [(((b[0] + b[2]) / 2 / FRAME_W * FMAP_OUT - 0.5),
+                      ((b[1] + b[3]) / 2 / FRAME_H * FMAP_OUT - 0.5))
+                     for b in bboxes.get(int(fi), [])]
+            rows.append(np.concatenate(
+                [img, hot(heat[fi]), hot(prob[r], marks)], axis=1))
+        panel = Image.fromarray(np.concatenate(rows, axis=0))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        panel.save(path)
+        print(f"example figure -> {path}")
+        return
+    print("no val events found; figure skipped")
+
+
+def load_split(dataset: str, split: str, featmaps_name: str = "featmaps.npy"):
+    """-> list of (seq_dir, featmaps float16 (n,c,28,28) — upsampled
+    bilinearly to FMAP_OUT when the backbone grid differs, e.g. DINOv2's
+    16x16 — heatmaps float32 (n,28,28), event-frame indicator bool (n,),
+    bboxes)."""
     out = []
     for seq in seq_dirs(dataset, split):
-        fm = np.load(f"{seq}/featmaps.npy")
+        # memory-map (not load) the featmaps: a full-split concatenation of
+        # DINOv2 maps is ~14 GB and gets the process SIGKILLed on a 16 GB
+        # machine; per-seq mmap + masked reads keep RSS at the masked
+        # subset size. The 28x28 backbone grids skip the copy entirely.
+        fm = np.load(f"{seq}/{featmaps_name}", mmap_mode="r")
+        if fm.shape[-1] != FMAP_OUT:
+            t = torch.from_numpy(np.asarray(fm)).float()
+            t = torch.nn.functional.interpolate(
+                t, size=(FMAP_OUT, FMAP_OUT), mode="bilinear",
+                align_corners=False)
+            fm = t.half().numpy()
         bboxes = load_bboxes(seq)
         heat = np.stack([boxes_to_heatmap(bboxes.get(i, [])) for i in range(len(fm))])
         ev = np.array([i in bboxes for i in range(len(fm))])
@@ -254,19 +326,33 @@ def main():
                     help="clip triggering modes (train_downstream cache)")
     ap.add_argument("--uniform-mults", default="1,2,4")
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--featmaps", default="featmaps.npy",
+                    help="backbone featmaps filename (featmaps_dino.npy for "
+                         "the DINOv2 run; storage selection follows it too)")
+    ap.add_argument("--clips-cache", default=None,
+                    help="clip cache path (default: train_downstream CACHE; "
+                         "use a separate file per backbone)")
+    ap.add_argument("--figure", default=None,
+                    help="optional example-panel PNG path (val event frames: "
+                         "image / gt heatmap / predicted heatmap)")
     ap.add_argument("--out", default=OUT_PATH)
     args = ap.parse_args()
     modes = args.modes.split(",")
     mults = [float(m) for m in args.uniform_mults.split(",")]
     device = "mps" if torch.backends.mps.is_available() else "cpu"
 
+    import train_downstream  # noqa: E402
+    train_downstream.FEATMAPS_NAME = args.featmaps
+    cache_path = args.clips_cache or train_downstream.CACHE
+
     print("loading clips (cached cerebellum trigger rollout) ...")
-    cache = load_or_compute_clips(args.dataset, modes)
+    cache = load_or_compute_clips(args.dataset, modes, cache_path)
     mode = modes[0]
 
     print("loading featmaps + bbox heatmaps ...")
-    train = load_split(args.dataset, "train")
-    val = [(fm, bboxes) for _, fm, _, _, bboxes in load_split(args.dataset, "val")]
+    train = load_split(args.dataset, "train", args.featmaps)
+    val_rows = load_split(args.dataset, "val", args.featmaps)
+    val = [(fm, bboxes) for _, fm, _, _, bboxes in val_rows]
 
     # storage-selection masks, computed once, shared across seeds
     specs = []                     # (name, kind, mult)
@@ -276,25 +362,13 @@ def main():
     specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
     specs += [(f"oracle({mode})", "oracle", 1.0)]
 
-    all_fm, all_heat = [], []
-    seq_slices = []                # (name-independent) per-seq frame ranges
-    off = 0
-    for seq, fm, heat, ev, _ in train:
-        all_fm.append(fm)
-        all_heat.append(heat)
-        seq_slices.append((seq, slice(off, off + len(fm)), ev))
-        off += len(fm)
-    big_fm = np.concatenate(all_fm)          # (N,24,28,28) float16
-    big_heat = np.concatenate(all_heat)      # (N,28,28) float32
-
     datasets = {}
     print(f"{'method':<20}{'stored':>8}{'frames':>8}")
     for name, kind, mult in specs:
-        mask = np.zeros(len(big_fm), dtype=bool)
-        fracs = []
-        for seq, sl, ev in seq_slices:
+        masks, fracs = [], []
+        for seq, fm, heat, ev, _ in train:
             info = cache[seq][mode]
-            fps, n = info["fps"], min(info["n_frames"], sl.stop - sl.start)
+            fps, n = info["fps"], min(info["n_frames"], len(fm))
             cb_mask = clips_to_frames([tuple(c) for c in info["clips"]], fps, n)
             frac = cb_mask.mean()
             if kind == "cb":
@@ -303,33 +377,53 @@ def main():
                 m = oracle_frames(frac, ev[:n].astype(np.float32))
             else:
                 m = uniform_frames(mult * frac, fps, n)
-            mask[sl.start:sl.start + n] = m
+            full = np.zeros(len(fm), dtype=bool)   # padded to seq length so
+            full[:n] = m                           # it indexes the mmap rows
+            masks.append(full)
             fracs.append(m.mean())
-        datasets[name] = (mask, float(np.mean(fracs)))
-        print(f"{name:<20}{np.mean(fracs):>8.3f}{int(mask.sum()):>8}")
+        total = int(sum(m.sum() for m in masks))
+        datasets[name] = (masks, float(np.mean(fracs)), total)
+        print(f"{name:<20}{np.mean(fracs):>8.3f}{total:>8}")
 
     results = {"config": {"seeds": args.seeds, "modes": modes,
                           "uniform_mults": mults, "epochs": args.epochs,
-                          "device": device,
+                          "device": device, "featmaps": args.featmaps,
+                          "fmap_channels": int(train[0][1].shape[1]),
                           "match_radius_cells": MATCH_RADIUS_CELLS},
                "methods": {}}
     print(f"\nval: {len(val)} sequences; training detection heads "
           f"({args.seeds} seeds/method) on {device}\n")
+    cin = int(train[0][1].shape[1])
+    last_models: dict[str, nn.Module] = {}
     for name, _, _ in specs:
-        mask, frac = datasets[name]
+        masks, frac, total = datasets[name]
+        # only the selected frames are materialized (order = seq order,
+        # within-seq index order — identical to the old big-array path)
+        x = np.concatenate([fm[m] for (_, fm, _, _, _), m
+                            in zip(train, masks)])
+        y = np.concatenate([heat[m] for (_, _, heat, _, _), m
+                            in zip(train, masks)])
         aps = []
+        model: nn.Module | None = None
         t0 = time.time()
         for seed in range(args.seeds):
-            model = train_head(big_fm[mask], big_heat[mask], seed, device,
-                               epochs=args.epochs)
+            model = train_head(x, y, seed, device,
+                               epochs=args.epochs, cin=cin)
             aps.append(eval_detection(model, val, device))
             print(f"  {name:<18} seed {seed:>2}: AP {aps[-1]:.3f}")
+        assert model is not None
+        last_models[name] = model
         results["methods"][name] = {
-            "stored_frac": frac, "n_frames": int(mask.sum()),
+            "stored_frac": frac, "n_frames": total,
             "ap_mean": float(np.mean(aps)), "ap_std": float(np.std(aps)),
             "runs": aps}
-        print(f"{name:<20}{frac:>8.3f}{int(mask.sum()):>8}"
+        print(f"{name:<20}{frac:>8.3f}{total:>8}"
               f"{np.mean(aps):>7.3f}±{np.std(aps):<5.3f}  ({time.time() - t0:.0f}s)\n")
+
+    if args.figure:
+        ref = (last_models.get("cerebellum")
+               or last_models[specs[0][0]])
+        save_example_figure(ref, val_rows, device, args.figure)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as fp:
