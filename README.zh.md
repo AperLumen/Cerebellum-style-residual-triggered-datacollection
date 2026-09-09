@@ -45,6 +45,17 @@ PYTHONPATH=. .venv/bin/python scripts/run_experiment.py data/synthetic
 PYTHONPATH=. .venv/bin/python -m pytest tests/
 ```
 
+本仓库的一个自包含子集（包 + 最小脚本 + 测试，不含数据集）打包在
+`public_edition/` 里。其中的 `scripts/demo_video.py` 可以把任意序列渲染成
+并排 demo 视频（原始帧 | 残差热力图 | HUD）——同一脚本也有一份在根目录
+`scripts/demo_video.py`：
+
+```bash
+cd public_edition && pip install -r requirements.txt
+PYTHONPATH=. python scripts/make_synthetic.py --out demo_scene
+PYTHONPATH=. python scripts/demo_video.py --src demo_scene --out demo_video.mp4
+```
+
 ## 用 iPhone 真实采集
 
 1. **视频**：用相机 app 录制（1080p30 足够）。
@@ -259,7 +270,7 @@ gyro warp 只能移除特征图*看得见*的运动。同样的旋转产生的�
 
 收益单调且未饱和：每提高 1.5 倍输入尺寸，就多消掉 6-10 个百分点的 naive 预测器动不了的平静残差。与光流的差距也随分辨率收窄（flow/gyro 0.82 → 0.73）：gyro warp 的主要误差源——位移的亚像素量化——随特征图变精细而缩小。这也反向解释了真实数据的两个 regime：桌面级 Open-AoE 在 224 px 下 f_map ~11-19、旋转 < ~5°/s（位移 < 0.05 特征图像素——没东西可消，warp 中性）；而 p95 |yaw| 31-52°/s 的高运动对在 ~0.5-0.7 特征图像素——进入了模型误差（roll 未建模、标定）开始*增加*残差而非消减的窗口。
 
-协议层设计规则：**伴随放电取消是一个被分辨率门控的原语**——配细粒度特征（DINOv2 patch token，或 ≥448 px 输入的 stride-8 特征图），它用 ~0.09 ms/帧消掉一半可预测残差；在粗特征图上它免费但中性。同一个变量也决定*触发器*是否工作：448 px 下门控自归一化触发器在全部 5 条合成验证序列上冻到 0 clips（基线 surprise 随分辨率增长并重尾化），而 winsorized 稳健统计在 5 条上全部触发——真实视频的门失效，在合成数据上复现了。
+协议层设计规则：**伴随放电取消是一个被分辨率门控的原语**——配细粒度特征（DINOv2 patch token，或 ≥448 px 输入的 stride-8 特征图），它用 ~0.09 ms/帧消掉一半可预测残差；在粗特征图上它免费但中性。（2026-09-09 更新：该配对中的 DINOv2 patch token 半侧已实测并关闭——residual-trigger 操作点上 ViT patch token 最多触发 3/40 段，MNV3 为 11/40；见下文"Backbone 替换路线关闭"。规则本身对 stride-8 卷积特征图仍然成立，那是它被实测过的版本。）同一个变量也决定*触发器*是否工作：448 px 下门控自归一化触发器在全部 5 条合成验证序列上冻到 0 clips（基线 surprise 随分辨率增长并重尾化），而 winsorized 稳健统计在 5 条上全部触发——真实视频的门失效，在合成数据上复现了。
 
 复现：
 
@@ -359,7 +370,7 @@ uniform(4x)       0.290   13516    0.193      0.73
 oracle            0.056    2528    0.203      0.80
 ```
 
-触发器本身工作正常（stored 7.1%、区间 recall 0.75），但选中的帧不是判别帧：残差触发存的是*运动学上不可预测*的帧（运动突变），而动词身份是语义信息、分布在整个操作区间——与残差峰对动作标注帧级反相关的实测（AUC 0.47，见上）一致。mAP 散布（0.19–0.21）在噪声量级；单 split、无 seed 误差棒。适用范围结论：价值主张在它设计的稀疏物理事件 regime（跌落、抓取失败、异常）成立；稠密语义任务的采集筛选需要别的信号。
+触发器本身工作正常（stored 7.1%、区间 recall 0.75），但选中的帧不是判别帧：残差触发存的是*运动学上不可预测*的帧（运动突变），而动词身份是语义信息、分布在整个操作区间——与残差峰对动作标注帧级反相关的实测（AUC 0.47，见上）一致。mAP 散布（0.19–0.21）在噪声量级；单 split、无 seed 误差棒——下一节的 3-fold CV 重测取代本表。当时给出的适用范围结论（"价值主张在它设计的稀疏物理事件 regime 成立"）是仅剩的逃生舱；下面做了主场正面检验，证伪。
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/extract_features_aoe.py data/aoe
@@ -367,18 +378,264 @@ PYTHONPATH=. .venv/bin/python scripts/make_verb_labels.py data/aoe
 PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
 ```
 
+## 真实数据下游价值：CV 重测（负结果确认）
+
+上面的单 split 表已被跨段重测取代：12 段（新增 3 段）、9 类动词
+（fold/grasp/hold/insert/lift/set_down/thread/unfold/wipe，每类在
+split 两半各 ≥300 标注帧），3-fold 跨段 CV × 35 seed = **105 轮/方法**，
+robust 触发（`scripts/run_downstream_aoe_cv.py`、
+`runs/downstream_aoe_cv.json`）：
+
+```
+方法              存储占比  val mAP        区间recall@10%
+cerebellum        0.160   0.162±0.077    0.67±0.12
+uniform(0.5x)     0.081   0.177±0.089    0.72±0.08
+uniform(1x)       0.161   0.173±0.082    0.68±0.07
+uniform(2x)       0.240   0.174±0.089    0.71±0.06
+uniform(4x)       0.400   0.167±0.084    0.71±0.09
+oracle            0.132   0.164±0.088    0.72±0.09
+```
+
+早版的 0.197 是单 split 采样噪声：所有方法的 mAP 在 1σ 内重合。
+"不迁移"现在有统计支撑。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_downstream_aoe_cv.py data/aoe
+```
+
+## 稀疏物理事件 regime：主场检验（负结果）
+
+上面的适用范围结论是真实数据价值主张仅剩的防线——于是做了正面检验，
+在触发器本该最赢的 regime 里：真实稀疏物理事件。binary 事件帧检测，
+取 10 段 Open-AoE 标注中含 drop/throw/toss/break 的片段（事件帧占
+3.3–26.3%）：原有 5 段桌面级 + `scripts/select_event_segments.py`
+新选的 5 段（事件动词筛选 + 运动下限 gyro p95 23–75°/s + 场景多样性
+kitchen/garden/warehouse/outdoor），事件区间由
+`scripts/prep_aoe.py --event-verbs` 导出，逐段 leave-one-out × 25 seed
+= **250 轮/方法**（`scripts/train_downstream_event.py`、
+`runs/downstream_event_results.json`）：
+
+```
+方法                存储占比  val AP        evRec@10%
+cerebellum           0.234   0.108±0.094   0.65±0.35
+uniform(0.5x)        0.121   0.105±0.082   0.60±0.34
+uniform(1x)          0.236   0.104±0.084   0.61±0.34
+uniform(2x)          0.280   0.108±0.085   0.64±0.34
+uniform(4x)          0.362   0.109±0.085   0.62±0.34
+oracle               0.079   0.144±0.128   0.63±0.35
+```
+
+（更早的 5 段纯桌面 pilot——cerebellum 存 43.4%、0.134±0.110 ≈
+uniform 1x 0.134±0.102、oracle 0.204±0.149——结论相同；10 段重测取代之。）
+
+**主场假设证伪。**即便在这里，cerebellum 与 uniform 依旧打平
+（存储同为 23–24% 时 0.108 vs 0.104）。oracle 仍最优，但优势从
+5 段时的 +0.070 收窄到 +0.036，evRec 领先也消失——场景一多样，
+连真值事件帧在这个 binary 任务里的判别价值都有限（标注导出的粗区间
++ 帧级二值标签；oracle 0.144±0.128 的 std 比优势本身还大）。
+存储-价值不对称存在（oracle 证明了），但运动不可预测性提取不出来。
+
+**当天同时关掉了最可能的逃生路线**
+（`scripts/run_trans_eval_event.py`、
+`runs/trans_eval_data_aoe_event_val.json`）。怀疑是：残差噪声是未补偿的
+自运动（平移），淹没了事件信号。事件段的 imu.csv 带着 SLAM 差分出的
+真值平移，因此无需重跑光流即可测"纯旋转 vs 旋转+真值平移（常深度）"
+warp，并把逐帧残差按事件区间**内/外**分解。结果：gyro_trans 在**每一段、
+区间内外都更差**（mean calm residual 0.0679 → 0.0704——与上面的平移项
+同为常深度模型类错误），且残差在事件区间内 vs 外几乎一样
+（0.197 vs 0.193；surprise 10.8 vs 11.3）。残差幅度对"事件是否发生"
+基本不敏感；噪声主体是手部/物体这类**世界运动**，任何相机运动模型——
+标定的或学习的——都消不掉。"把自运动分离得更干净"救不了这个 regime。
+
+```bash
+# 选段 + 下载 + 准备 5 段新高运动事件段
+PYTHONPATH=. .venv/bin/python scripts/select_event_segments.py
+.venv/bin/python scripts/fetch_aoe.py fetch --selected
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe_event/val/seq_XXX --event-verbs
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe_event
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_event.py data/aoe_event \
+    --seeds $(seq 25)
+PYTHONPATH=. .venv/bin/python scripts/run_trans_eval_event.py data/aoe_event --split val
+```
+
+## z 图读出端升级：最后的出口关闭（负结果）
+
+幅度不携带事件信息，那 z 图的**空间模式**呢？同一 10 段 LOO × 25 seed
+协议（250 轮/格）上对比了四种读出
+（`scripts/train_downstream_event_zreadout.py`、
+`runs/downstream_event_zreadout.json`）：zamp（z² 全局幅度，1 维）、
+zpyr（z² 空间金字塔 1+4+16=21 维）、feat（576 维 backbone，基线）、
+feat+zpyr（拼接）：
+
+```
+读出        cerebellum    uniform(1x)   oracle
+zamp        0.129±0.098   0.129±0.098   0.129±0.098
+zpyr        0.126±0.095   0.126±0.094   0.132±0.100
+feat        0.108±0.094   0.104±0.084   0.144±0.128
+feat+zpyr   0.126±0.097   0.118±0.096   0.135±0.109
+```
+
+决定性证据是 zamp 行：**三种存储方法下 AP 逐位相同**——不是巧合，
+是零信号坍缩（逻辑回归学到零权重，AP 退化为验证集事件率的常数预测）。
+zpyr 不优于 zamp（空间模式无信息）；feat+zpyr ≈ feat（对 backbone
+零补充）；z 读出的高 evRec（0.84–0.87）只是"全场高分 + 10% 预算"的
+假象。**残差图——幅度与空间模式——在真实 egocentric 数据上不携带
+事件判别信息。**框架内所有出口（预测更准、建模更全、读出更巧）至此
+全部实测关闭：真实数据上触发器能回答"哪里动了"，回答不了"发生了什么"。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_event_zreadout.py data/aoe_event \
+    --seeds $(seq 25)
+```
+
+## 行走级片段："运动越大副本越值钱"证伪（负结果）
+
+真实数据上伴随放电最后的辩护是尺度：桌面运动亚像素，warp 中性是
+理所当然的——行走级旋转总该值钱了。`scripts/select_walk_segments.py`
+从已探测池中选出运动最高的 4 段（field/kitchen/balcony/多房间，
+gyro p95 71–75°/s，≥40°/s 下限；`data/aoe_motion_walk`、
+`runs/flow_eval_walk.json`）：
+
+```
+预测器      平静残差（4 段均值）      ms/帧
+naive           0.143                 --
+gyro warp       0.158  （3/4 段比 naive 差）  0.033
+DIS 光流        0.105  （4 段全胜）          8.5
+```
+
+证伪，且机制明确：行走尺度下 gyro warp 在 3/4 段比不补偿更差
+（mean calm residual +11%）——纯旋转模型看不见的模型类误差（平移、
+视差、滚动快门）随运动增大，且 SLAM 差分出的副本本身在高运动下退化
+（y 轴符号标定跌到 r = −0.42~−0.59）。光流质量仍全胜（−26%），成本
+仍以 ~250 倍落败。与桌面（中性）、高运动（−12%）合并：**gyro warp
+在真实数据的任何已测运动尺度上都没赢过 naive。**残差质量优势是合成
+regime 独有的性质——那里事件是画面里唯一不可预测的运动。协议层的
+跨 regime 资产仍在——副本成本 0.033 ms vs 光流 8.5 ms，本次同样实测——
+但真实视频上"廉价 warp 做运动去重"是成本账，不是质量账。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/select_walk_segments.py
+.venv/bin/python scripts/fetch_aoe.py fetch --selected
+for d in data/aoe_src/<segment>; do
+  PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py "$d" \
+      --out data/aoe_motion_walk/val/seq_XXX
+done
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe_motion_walk
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_walk \
+    --n-train 0 --n-val 4 --robust
+```
+
+## 检测级下游 rig（负结果：冻结特征瓶颈）
+
+上面的帧级 AP 对比可能是被任务本身而不是数据卡住的——于是把合成 rig
+升级到检测级：`scripts/make_dataset.py` 现在导出逐帧 bbox 真值，
+`scripts/train_detection_synth.py` 在冻结特征图上训练 CenterNet 风格
+热点头，用自包含检测 AP 对照精确 bbox 真值（20-seed 网格，
+`runs/detection_synth_results.json`）：
+
+```
+方法              存储占比  帧数    detAP
+cerebellum        0.034     826    0.005±0.009
+uniform(1x)       0.074    1766    0.015±0.030
+uniform(2x)       0.091    2181    0.010±0.016
+uniform(4x)       0.121    2894    0.007±0.013
+oracle            0.018     449    0.002±0.003
+```
+
+所有方法都在噪声级、1σ 重合——但这个零结果被钉在冻结 backbone 上，
+而不是 rig 本身：评测有回归测试守住——完美预测热点图能拿到 AP = 1.0
+（`tests/test_detection_synth.py`）；诊断显示 `features[:3]` 对平坦
+blob 几乎无响应（GT cell 处响应仅高出背景 z 分数 +0.15~0.66；
+`scripts/diag_detection_rig.py`、`scripts/diag_upper_bound.py`、
+`runs/diag_*.png`）。全量数据上界（24k 帧全部可用）也只有 train AP
+0.56 / **val AP 0.003**，同分布 train-on-val ceiling 仅 0.415。
+检测级信号在 `features[:3]` 下不存在——这把 backbone 替换顶上了
+路线图。紧接着实测，结案：
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_detection_synth.py data/dataset
+```
+
+## 可插拔采集层
+
+同一轮的正面工程结果：触发器现在是一个协议层 API
+（`cerebellum_cancel/acquisition.py`）：
+`AcquisitionLayer.step(frame, gyro, t) → {keep, in_clip, surprise, z_map,
+clips}`，前端可插拔 callable（内置 MobileNetV3 `features[:3]`，与
+特征提取管线同链），`finalize()` 返回保存的片段。由
+`scripts/demo_acquisition.py` 在真实 webcam 录制上端到端验收
+（1950 帧）：6 个 keep 段 / 帧级存储 14.4%（clip 级 6.8%），
+surprise 峰值帧的残差热力图叠加正确定位在头发运动区域
+（`runs/acquisition_demo.json`、`runs/acquisition_demo_peak.png`）——
+与上文 22 段 robust 统计的行为结论一致。含契约测试
+（`tests/test_acquisition.py`；49 passed，pyright 0）。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/demo_acquisition.py data/webcam_rec
+```
+
+## Backbone 替换路线关闭（负结果）
+
+上面的检测级零结果把瓶颈钉在冻结前端上，于是把 MobileNetV3
+`features[:3]` 换成自监督 ViT patch token 成了路线图的头号增强项。
+三条子路全部实测（`scripts/extract_featmaps_dino.py`、
+`scripts/run_trigger_scan_s8.py`；根因诊断见
+`scripts/diag_dino_trigger*.py`）：
+
+1. **DINOv2 ViT-S/14（384ch，16px/cell）：触发器 0/40 训练段触发。**
+   patch 量化抖动 + 双线性 warp 对分段常数 patch 场系统性误预测，
+   calm 上尾钉死 running sd，事件帧 z 只有 0.8–1.1（事件帧超 calm
+   p99 的比例仅 8–12%，MNV3 为 18–29%）。常规修法 per-channel
+   标准化在该残差管线内是恒等变换（z = err/sd(err) 仿射不变），
+   协议内不可修。帧级与检测级下游随之全面退化，只剩 uniform 行
+   有信息量（`runs/downstream_dino.json`：uniform(1x) 存 5.2%、
+   AP 0.196、evRec@10 0.79；`runs/detection_synth_dino_results.json`：
+   uniform 行 detAP NaN——这是 all-zero-peak seed 下的既有汇总
+   脆性，已发表 MNV3 行同样受影响，修订待拍板）。
+2. **DINOv2 ViT-S/8（粒度正解，8px/cell）：官方权重已被 Meta 下架**
+   （CDN 403；HF/ModelScope 无镜像）。
+3. **DINOv1 ViT-S/8 替代探针：事件区分度恢复，持续性不足。**
+   事件可分性没问题（ev99 0.27 vs MNV3 0.23；高分帧锁定事件），
+   但事件激励不持续——z_ema 峰值卡在门限之下，触发率
+   **3/40 段 vs MNV3 11/40**（`runs/trigger_scan_s8.json`；
+   与 headline 触发扫描同口径的 40 段扫描）。
+
+结论：residual-trigger 操作点上，自监督 ViT patch token 全面不如
+2019 年的 MobileNetV3 早期层。已发表前端保持最优；backbone 替换
+路线关闭。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps_dino.py data/dataset
+PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
+```
+
 ## 诚实的局限性
 
 - **屏幕录制是此方法的死路（实测，非推测）**。对场景做过一次 `screencapture -v` 录制的端到端测试：静态帧很干净（残差 4e-5），但运动下即使*oracle*补偿器（完美知道真实平移）也留下 ~0.066 的残差，且最佳的整数对齐帧对差异为 1.16/255，而原始帧是 0.009/255——约 130 倍的下限。ProMotion 合成器帧混合 / HEVC B 帧平滑破坏了此方法需要的信号（帧间锐利的时间采样）。结论：在真实相机（iPhone / webcam）上验证，它们采样的是锐利瞬间，而不是屏幕录制。
-- **仅旋转补偿**：未建模平移/视差（无加速度计融合）；学习到的权重能吸收一部分，但行走的设备会产生比此合成 demo 更大的残差。常深度平移项已实测为*负收益*（见上节）：真实场景深度结构化，平移需要带深度结构的模型。
+- **仅旋转补偿**：未建模平移/视差（无加速度计融合）；学习到的权重能吸收一部分。常深度平移项已实测为*负收益*（见上节）：真实场景深度结构化，平移需要带深度结构的模型。且行走尺度下纯旋转 warp 比不补偿更差（实测 3/4 段）：模型类误差随运动增大。
 - **合成 demo 是有利的**：真实场景有自动对焦呼吸、曝光自适应——在负像吸收它们之前，这些看起来都像"surprise"。这种吸收正是多时间尺度可塑性的用途，但需要真实数据调优。
 - **阈值**：featmap/下游路径现在自校准（`AdaptiveTrigger`——轨迹自身平静统计量上的无量纲 6/2.5 门控）。像素空间 demo 路径仍使用手调 `TriggerConfig` 值；且 regime 检查表明自校准买到的是工作 regime 内的精度，不是 regime 不变性。
-- ~~下游价值未测量~~ **合成上已完成**（见上节）：cerebellum 片段训练的检测器每存储字节优于均匀采样——也优于把预算全花在事件帧上的 oracle。**真实 egocentric 视频上优势未迁移**（见上节）：触发器选的是运动不可预测的帧，不是语义重要的帧。
-- **真实数据下游表是单 split、单 seed**：mAP 散布在噪声量级；下一个是 3-fold 跨段 + 误差棒重跑，再下结论。
+- ~~下游价值未测量~~ **合成上已完成；真实上实测为负**（见上各节）：cerebellum 片段每存储字节训练的检测器优于均匀采样——也优于把预算全花在事件帧上的 oracle——但优势不迁移到真实 egocentric 视频，已在 105 轮（3-fold CV，动词分类）与 250 轮（稀疏物理事件主场检验）精度上确认。运动不可预测性即使在它本该赢的地方也提取不出存储-价值不对称。
+- ~~真实数据下游表是单 split、单 seed~~ 已被上面的 3-fold CV 重测取代（`runs/downstream_aoe_cv.json`）。
+- **残差图在真实 egocentric 数据上不携带事件信息**（实测，250 轮/格）：幅度和空间模式都不携带——1 维 z 幅度读出在三种存储方法下 AP 逐位相同（零信号坍缩）。真实数据上触发器回答的是"哪里动了"，不是"发生了什么"；语义重要性仲裁必须发生在这一层上游的视觉模型侧。
+- **gyro warp 在真实数据的任何已测运动尺度上都没改善过残差质量**（桌面：物理中性；高运动对：−12%；行走级：+11%，3/4 段比 naive 差）。分辨率设计规则（合成上单调 −41/−52/−58%）不迁移到真实高运动数据（448px 交叉：gyro +15%）——分辨率修估计器误差，修不了模型类误差。
+- **检测级信号在 `features[:3]` 下不存在**（实测：全量数据 val AP 0.003，同分布 ceiling 0.415）。显而易见的修法——换更强的冻结 backbone——已试并结案：DINOv2 ViT-S/14 触发 0/40 段（协议内不可修），DINOv1 ViT-S/8 触发 3/40 vs MNV3 11/40（见上节）。
+- **光流仲裁的价值仍未在真实失效模式上兑现**：机制与成本已验证（摊销 ~0.15 ms/帧），但合成 rig 缺少级联要抓的那些失效模式（真实 roll、视差、大标定误差）。
+- **真 gyro 通路未验证**：iPhone 采集流程已写好，但迄今所有真实数据数字都用 SLAM 轨迹差分出的 gyro 替身——且 SLAM 副本在低纹理/快速运动下自身退化（行走段 y 轴符号标定 r = −0.42~−0.59）。副本质量与模型类误差是两种独立的失效模式，不应混淆。
 
 ## 下一步
 
-1. **iPhone 实拍**（真正的实验）：按 README 录制手持视频 + IMU；标注事件；跑同样的评估。这是当前的 critical path——屏幕录制捷径已被证伪。
-2. 如果想要一个桌面版的中间方案，可做 webcam 对着屏幕的变体：相机通道时间上是锐利的，但需要镜子或对着屏幕的外接相机（内置摄像头拍到的是用户自己）。
-3. ~~下游训练对比~~ **合成上已完成**（见上节）：cerebellum 片段在 4 倍字节下胜过 uniform，并在事件 recall 上胜过 oracle。真实数据重跑：优势未迁移（见上节）——排队中的后续：3-fold 跨段 + seed 误差棒，然后在触发器本该赢的稀疏物理事件 regime 做正向验证。
-4. ~~给 action 向量加入加速度计特征（平移预测）~~ **已实测，负收益**（见上节）：常深度平移 warp 帮倒忙；需要深度结构（单目深度/平面模型），或者留在按需光流仲裁。
+上一轮路线图三项已全部结案（全部实测，2026-09-08/09）：
+
+1. ~~检测级合成 rig~~ **已结案，负结果**（见上节）：所有存储方法的检测 AP 都在噪声级；根因是冻结特征瓶颈，不是 rig。
+2. ~~DINO backbone 替换~~ **已结案，负结果，路线关闭**（见上节）：DINOv2 ViT-S/14 触发 0/40 段且协议内不可修；ViT-S/8 权重已下架；DINOv1 ViT-S/8 触发 3/40 vs MNV3 11/40。已发表前端保持最优。
+3. ~~协议层接口化~~ **已完成**（见上节）：采集层在 1950 帧真实 webcam 数据上通过验收 demo。
+
+未结项，按优先级：
+
+1. **光流仲裁级联的真实失效模式验证。**构造或采集含真实 roll、视差、大标定误差的数据，测否决率。注意前提已收窄：真实数据上 gyro warp 本身不赚残差质量（行走级 probe），级联的价值只剩"廉价副本失效时的安全网"——对着这个收窄后的主张测。
+2. **论文里还没实现的结构**：ON/OFF 对抗通道（两级 vs 一级抑制）与 recurrent 加速（像素路径 cell 间扩散是雏形）。
+3. **iPhone 实拍——意义已更新。**不再是"验证通路"（真实数据行为已刻画清楚），而是"真机 IMU 不像 SLAM 替身那样在高运动下退化，能否翻转行走级结论"的实验。同步方案见上节。
+4. **加速器友好化**：全部算子都是平移 + EMA，理论上整套层可下沉到 ISP/NPU 旁路。
+5. **真实数据正向用法**：语义重要性筛选已在真实 egocentric 数据上证伪，但"运动去重/带宽预筛"（剪掉自运动可解释的冗余片段）仍是成本账成立的用途——天然验证载体就是采集层 demo。

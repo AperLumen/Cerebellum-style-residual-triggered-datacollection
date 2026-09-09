@@ -52,6 +52,18 @@ Run the unit tests:
 PYTHONPATH=. .venv/bin/python -m pytest tests/
 ```
 
+A self-contained subset of this repository (package + minimal scripts +
+tests, no datasets) is packaged in `public_edition/`. Its
+`scripts/demo_video.py` renders a side-by-side demo video (raw frame |
+residual heatmap | HUD) from any sequence — the same script also exists
+at `scripts/demo_video.py`:
+
+```bash
+cd public_edition && pip install -r requirements.txt
+PYTHONPATH=. python scripts/make_synthetic.py --out demo_scene
+PYTHONPATH=. python scripts/demo_video.py --src demo_scene --out demo_video.mp4
+```
+
 ## Real capture with an iPhone
 
 1. **Video**: record with the Camera app (1080p30 is plenty).
@@ -425,7 +437,11 @@ Design rule for the protocol layer: **corollary-discharge cancellation is
 a resolution-gated primitive** — pair it with fine-grained features
 (DINOv2 patch tokens, or stride-8 maps at >= 448 px input) and it removes
 half the predictable residual for ~0.09 ms/frame; at coarse maps it is
-free but neutral. The same variable decides whether the *trigger* keeps
+free but neutral. (Update 2026-09-09: the DINOv2 patch-token half of this
+pairing has since been measured and closed — ViT patch tokens fire 3/40
+segments at best vs MNV3's 11/40 at the residual-trigger operating point;
+see "Backbone replacement route closed" below. The rule stands for
+stride-8 conv maps, where it was measured.) The same variable decides whether the *trigger* keeps
 working: at 448 px the gated self-normalizing trigger froze to zero clips
 on all 5 synthetic val sequences (baseline surprise grows and
 heavy-tails with resolution), while winsorized robust stats fired on all
@@ -667,14 +683,283 @@ is *kinetically* unpredictable (motion bursts), while verb identity is
 semantic and spread over the whole manipulation interval — consistent
 with the measured frame-level anticorrelation of residual peaks vs
 action annotations (AUC 0.47, §above). The mAP spread (0.19-0.21) is
-noise-scale; single split, no seed error bars. Scope conclusion: the
-value proposition holds in the sparse-physical-event regime it was
-designed for; dense semantic acquisition needs a different signal.
+noise-scale; single split, no seed error bars — the 3-fold CV rerun in
+the next section supersedes this table. The scope conclusion offered at
+the time ("the value proposition holds in the sparse-physical-event
+regime it was designed for") was the one remaining escape hatch; it was
+tested head-on below, and falsified.
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/extract_features_aoe.py data/aoe
 PYTHONPATH=. .venv/bin/python scripts/make_verb_labels.py data/aoe
 PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
+```
+
+## Real-data downstream value, CV rerun (negative result confirmed)
+
+The single-split table above is superseded by a cross-segment rerun:
+12 segments (3 added), 9 verb classes (fold/grasp/hold/insert/lift/
+set_down/thread/unfold/wipe, each >= 300 annotated frames in both split
+halves), 3-fold cross-segment CV × 35 seeds = **105 rounds/method**,
+robust trigger (`scripts/run_downstream_aoe_cv.py`,
+`runs/downstream_aoe_cv.json`):
+
+```
+method          stored  val mAP        ivRec@10%
+cerebellum       0.160  0.162±0.077    0.67±0.12
+uniform(0.5x)    0.081  0.177±0.089    0.72±0.08
+uniform(1x)      0.161  0.173±0.082    0.68±0.07
+uniform(2x)      0.240  0.174±0.089    0.71±0.06
+uniform(4x)      0.400  0.167±0.084    0.71±0.09
+oracle           0.132  0.164±0.088    0.72±0.09
+```
+
+The earlier 0.197 was single-split sampling noise: every method's mAP
+coincides within 1σ. "Does not transfer" now has statistical support.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_downstream_aoe_cv.py data/aoe
+```
+
+## Sparse physical-event regime: home-field test (negative result)
+
+The scope conclusion above was the one remaining defense of the real-data
+value proposition — so it was tested head-on, in the regime where the
+trigger should win most: real sparse physical events. Binary event-frame
+detection on 10 Open-AoE segments whose annotations contain
+drop/throw/toss/break (event frames 3.3–26.3% per segment): the original
+5 desk-level segments plus 5 new ones selected by
+`scripts/select_event_segments.py` (event-verb filter + motion floor,
+gyro p95 23–75°/s, scene diversity kitchen/garden/warehouse/outdoor),
+event intervals exported by `scripts/prep_aoe.py --event-verbs`,
+leave-one-segment-out × 25 seeds = **250 rounds/method**
+(`scripts/train_downstream_event.py`, `runs/downstream_event_results.json`):
+
+```
+method              stored  val AP        evRec@10%
+cerebellum           0.234  0.108±0.094   0.65±0.35
+uniform(0.5x)        0.121  0.105±0.082   0.60±0.34
+uniform(1x)          0.236  0.104±0.084   0.61±0.34
+uniform(2x)          0.280  0.108±0.085   0.64±0.34
+uniform(4x)          0.362  0.109±0.085   0.62±0.34
+oracle               0.079  0.144±0.128   0.63±0.35
+```
+
+(An earlier 5-segment, desk-level-only pilot — cerebellum 43.4% stored,
+0.134±0.110 ≈ uniform 1x 0.134±0.102, oracle 0.204±0.149 — gave the
+same verdict; the 10-segment rerun replaces it.)
+
+**Home-field hypothesis falsified.** Even here, cerebellum ties uniform
+(0.108 vs 0.104 at matched 23–24% storage). Oracle stays best, but its
+margin shrinks from +0.070 (5 segments) to +0.036 and its evRec lead
+disappears — once scene diversity is enforced, even ground-truth event
+frames carry limited discriminative value in this binary task
+(coarse label-derived intervals + frame-level binary labels; oracle
+0.144±0.128 has std larger than the margin). The storage-value
+asymmetry exists (oracle proves it); kinetic unpredictability does not
+extract it.
+
+**The most likely escape route was closed the same day**
+(`scripts/run_trans_eval_event.py`,
+`runs/trans_eval_data_aoe_event_val.json`). The suspicion: residual
+noise is uncompensated self-motion (translation) drowning the event
+signal. The event segments' imu.csv carries SLAM-derived ground-truth
+translation, so a rotation+GT-translation (constant-depth) warp can be
+tested without re-running flow, with the per-frame residual decomposed
+inside vs outside event intervals. Result: gyro_trans is worse than
+rotation-only in **every segment, inside and outside events** (mean calm
+residual 0.0679 → 0.0704 — the same constant-depth model-class error as
+the translation term above), and the residual is essentially identical
+inside vs outside event intervals (0.197 vs 0.193; surprise 10.8 vs
+11.3). Residual amplitude is insensitive to whether an event happens;
+the noise is world motion (hands, objects), which no camera-motion
+model — calibrated or learned — can remove. "Separate self-motion
+better" cannot rescue this regime either.
+
+```bash
+# select + fetch + prep 5 additional high-motion event segments
+PYTHONPATH=. .venv/bin/python scripts/select_event_segments.py
+.venv/bin/python scripts/fetch_aoe.py fetch --selected
+PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py data/aoe_src/<segment> \
+    --out data/aoe_event/val/seq_XXX --event-verbs
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe_event
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_event.py data/aoe_event \
+    --seeds $(seq 25)
+PYTHONPATH=. .venv/bin/python scripts/run_trans_eval_event.py data/aoe_event --split val
+```
+
+## z-map readout upgrade: the last exit closed (negative result)
+
+If amplitude carries no event information, maybe the z-map's **spatial
+pattern** does. Four readouts were compared on the same 10-segment
+LOO × 25-seed protocol (250 rounds/cell;
+`scripts/train_downstream_event_zreadout.py`,
+`runs/downstream_event_zreadout.json`): zamp (global z² amplitude, 1-d),
+zpyr (z² spatial pyramid, 1+4+16 = 21-d), feat (576-d backbone,
+baseline), feat+zpyr (concatenation):
+
+```
+readout     cerebellum    uniform(1x)   oracle
+zamp        0.129±0.098   0.129±0.098   0.129±0.098
+zpyr        0.126±0.095   0.126±0.094   0.132±0.100
+feat        0.108±0.094   0.104±0.084   0.144±0.128
+feat+zpyr   0.126±0.097   0.118±0.096   0.135±0.109
+```
+
+The decisive row is zamp: **bit-identical AP across all three storage
+methods** — not a coincidence but zero-signal collapse (logistic
+regression learns zero weights; AP degrades to a constant event-rate
+prediction). zpyr adds nothing over zamp (spatial pattern
+uninformative); feat+zpyr ≈ feat (no complement to the backbone); the
+z-readout's high evRec (0.84–0.87) is an artifact of "high scores
+everywhere + a 10% budget". **The residual map — amplitude and spatial
+pattern alike — carries no event-discriminative information on real
+egocentric data.** Every in-framework exit (better prediction, more
+modeling, smarter readout) is now measured closed: on real data the
+trigger can answer "where did something move", not "what happened".
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_downstream_event_zreadout.py data/aoe_event \
+    --seeds $(seq 25)
+```
+
+## Walking-level segments: "more motion, more value" falsified (negative result)
+
+The one remaining defense of the corollary discharge on real data was
+scale: desk motion is sub-pixel, so of course the warp was neutral —
+walking-scale rotation should finally pay.
+`scripts/select_walk_segments.py` picks the 4 highest-motion segments
+from the probed pool (field / kitchen / balcony / multi-room, gyro p95
+71–75°/s, ≥ 40°/s floor; `data/aoe_motion_walk`,
+`runs/flow_eval_walk.json`):
+
+```
+predictor   calm residual (mean, 4 segments)    ms/frame
+naive             0.143                           --
+gyro warp         0.158  (worse than naive 3/4)   0.033
+DIS flow          0.105  (best, all 4)            8.5
+```
+
+Falsified, with a mechanism: at walking scale the gyro warp is worse
+than no compensation on 3 of 4 segments (+11% mean calm residual) — the
+model-class error the rotation-only shift cannot see (translation,
+parallax, rolling shutter) grows with motion, and the SLAM-derived copy
+itself degrades (y-axis sign calibration drops to r = −0.42~−0.59).
+Flow still wins on quality (−26%) and still loses on cost by ~250x.
+Combined with desk (neutral) and high-motion (−12%) results: **the gyro
+warp has never beaten naive on real data at any measured motion scale.**
+The residual-quality advantage is a property of the synthetic regime,
+where the event is the only unpredictable motion in the frame. The
+protocol layer keeps its cross-regime asset — the copy costs 0.033 ms
+vs flow's 8.5 ms, measured here too — but on real video "motion dedup by
+cheap warp" is a cost play, not a quality play.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/select_walk_segments.py
+.venv/bin/python scripts/fetch_aoe.py fetch --selected
+for d in data/aoe_src/<segment>; do
+  PYTHONPATH=. .venv/bin/python scripts/prep_aoe.py "$d" \
+      --out data/aoe_motion_walk/val/seq_XXX
+done
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe_motion_walk
+PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_walk \
+    --n-train 0 --n-val 4 --robust
+```
+
+## Detection-grade downstream rig (negative result: frozen-feature bottleneck)
+
+The frame-level AP comparisons above could be capped by the task rather
+than the data — so the synthetic rig was upgraded to detection grade:
+`scripts/make_dataset.py` now dumps per-frame bbox ground truth, and
+`scripts/train_detection_synth.py` trains a CenterNet-style heatmap head
+on the frozen featmaps with a self-contained detection AP against exact
+bbox GT (20-seed grid, `runs/detection_synth_results.json`):
+
+```
+method           stored  frames  detAP
+cerebellum        0.034     826    0.005±0.009
+uniform(1x)       0.074    1766    0.015±0.030
+uniform(2x)       0.091    2181    0.010±0.016
+uniform(4x)       0.121    2894    0.007±0.013
+oracle            0.018     449    0.002±0.003
+```
+
+All methods sit at noise level with overlapping 1σ — but this null is
+pinned on the frozen backbone, not the rig: the eval is guarded by a
+regression test where a perfect-prediction heatmap scores AP = 1.0
+(`tests/test_detection_synth.py`), and diagnostics show `features[:3]`
+barely responds to the flat blobs (response at GT cells z-scored
++0.15~0.66 above background; `scripts/diag_detection_rig.py`,
+`scripts/diag_upper_bound.py`, `runs/diag_*.png`). The full-data upper
+bound (all 24k frames) reaches train AP 0.56 / **val AP 0.003**, and even
+an in-distribution train-on-val ceiling is only 0.415. Detection-grade
+signal does not exist at `features[:3]` — which promoted backbone
+replacement to the top of the roadmap. Measured next, and closed:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/train_detection_synth.py data/dataset
+```
+
+## Pluggable acquisition layer
+
+The positive engineering result of the same round: the trigger is now a
+protocol-layer API (`cerebellum_cancel/acquisition.py`):
+`AcquisitionLayer.step(frame, gyro, t) → {keep, in_clip, surprise, z_map,
+clips}`, with a pluggable frontend callable (the built-in one is
+MobileNetV3 `features[:3]`, the same chain as the extraction pipeline)
+and `finalize()` returning the saved clips. Validated end-to-end on the
+real webcam recording by `scripts/demo_acquisition.py` (1950 frames):
+6 keep segments / 14.4% frame storage (6.8% in clips), and the
+peak-surprise frame's residual heatmap overlay localizes exactly the
+hair-motion region (`runs/acquisition_demo.json`,
+`runs/acquisition_demo_peak.png`) — consistent with the 22-segment
+robust-stats behavior above. Contract tests included
+(`tests/test_acquisition.py`; 49 passed, pyright 0).
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/demo_acquisition.py data/webcam_rec
+```
+
+## Backbone replacement route closed (negative result)
+
+The detection-grade null above pinned the bottleneck on the frozen
+frontend, so replacing MobileNetV3 `features[:3]` with self-supervised
+ViT patch tokens became the roadmap's top enhancement item. All three
+sub-routes were measured (`scripts/extract_featmaps_dino.py`,
+`scripts/run_trigger_scan_s8.py`; root cause in
+`scripts/diag_dino_trigger*.py`):
+
+1. **DINOv2 ViT-S/14 (384ch, 16px/cell): the trigger fires on 0/40
+   training segments.** Patch-quantization jitter plus the bilinear warp
+   systematically mispredict piecewise-constant patch fields, so the calm
+   upper tail pins the running sd and event frames reach only z =
+   0.8–1.1 (event frames exceed calm p99 in 8–12% of cases vs MNV3's
+   18–29%). Per-channel standardization — the usual fix — is an identity
+   transform inside this residual pipeline (z = err/sd(err) is
+   affine-invariant), so the defect is unfixable in-protocol. The
+   frame-level and detection-level downstreams degrade accordingly; only
+   the uniform rows stay informative (`runs/downstream_dino.json`:
+   uniform(1x) 5.2% stored, AP 0.196, evRec@10 0.79;
+   `runs/detection_synth_dino_results.json`: uniform detAP NaN — a
+   pre-existing summary fragility on all-zero-peak seeds that also
+   affects the published MNV3 rows, revision pending).
+2. **DINOv2 ViT-S/8 (the right granularity, 8px/cell): official weights
+   taken down by Meta** (CDN 403; no HF/ModelScope mirror).
+3. **DINOv1 ViT-S/8 as substitute probe: discriminability recovers,
+   persistence does not.** Event separability is fine (ev99 0.27 vs
+   MNV3's 0.23; top-score frames lock onto events) but event excitation
+   does not persist — the z_ema peak stalls below the gate and the
+   trigger fires on **3/40 segments vs MNV3's 11/40**
+   (`runs/trigger_scan_s8.json`; same 40-segment protocol as the
+   headline trigger scan).
+
+Conclusion: at the residual-trigger operating point, self-supervised ViT
+patch tokens lose outright to 2019 MobileNetV3 early layers. The
+published frontend stays optimal; the backbone route is closed.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/extract_featmaps_dino.py data/dataset
+PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
 ```
 
 ## Honest limitations
@@ -690,10 +975,12 @@ PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
   cameras (iPhone / webcam), which sample sharp instants, not on screen
   captures.
 - **Rotation-only compensation**: translation/parallax is not modeled (no
-  accelerometer fusion); the learned weights absorb some of it, but a walking
-  rig will produce larger residuals than this synthetic demo. A constant-depth
-  translation term was measured and is a *negative* (section above): real
-  scenes are depth-structured, so translation needs depth-aware models.
+  accelerometer fusion); the learned weights absorb some of it. A
+  constant-depth translation term was measured and is a *negative*
+  (section above): real scenes are depth-structured, so translation needs
+  depth-aware models. And at walking scale the rotation-only warp is worse
+  than no compensation at all (measured, 3/4 segments): model-class error
+  grows with motion.
 - **The synthetic demo is favorable**: real scenes have autofocus breathing,
   exposure adaptation — all of which look like "surprise" until the negative
   image absorbs them. That absorption is exactly what the multi-timescale
@@ -703,31 +990,80 @@ PYTHONPATH=. .venv/bin/python scripts/train_downstream_aoe.py data/aoe
   statistics). The pixel-space demo path still uses hand-set `TriggerConfig`
   values; and the regime check shows self-calibration buys precision at the
   operating regime, not regime invariance.
-- ~~Downstream value not yet measured~~ **done on synthetic** (section
-  above): cerebellum clips train better detectors per stored byte than
-  uniform sampling — and better than an oracle that spends its budget
-  only on event frames. **On real egocentric video the advantage does not
-  transfer** (section above): the trigger selects kinetically
-  unpredictable frames, not semantically discriminative ones.
-- **Real-data downstream table is single-split, single-seed**: the mAP
-  spread is noise-scale; a 3-fold cross-segment rerun with error bars is
-  queued before drawing scope conclusions.
+- ~~Downstream value not yet measured~~ **done on synthetic; measured
+  negative on real** (sections above): cerebellum clips train better
+  detectors per stored byte than uniform — and better than an oracle that
+  spends its budget only on event frames — but the advantage does not
+  transfer to real egocentric video, confirmed at 105 rounds (3-fold CV,
+  verb classification) and 250 rounds (sparse physical-event home-field
+  test). Kinetic unpredictability does not extract the storage-value
+  asymmetry even where it should.
+- ~~Real-data downstream table is single-split, single-seed~~
+  **superseded** by the 3-fold CV rerun above (`runs/downstream_aoe_cv.json`).
+- **The residual map carries no event information on real egocentric data**
+  (measured, 250 rounds/cell): neither amplitude nor spatial pattern — the
+  1-d z-amplitude readout produces bit-identical AP across all three
+  storage methods (zero-signal collapse). On real data the trigger answers
+  "where did something move", not "what happened"; semantic importance
+  arbitration must live in the vision model upstream of this layer.
+- **The gyro warp has never improved real-data residual quality** at any
+  measured motion scale (desk: physically neutral; high-motion pair: −12%;
+  walking-level: +11%, worse than naive on 3/4 segments). The resolution
+  design rule (monotone −41/−52/−58% on synthetic) does not transfer to
+  real high-motion data (448px cross: gyro +15%) — resolution fixes
+  estimator error, not model-class error.
+- **Detection-grade signal does not exist at `features[:3]`** (measured:
+  full-data val AP 0.003, in-distribution ceiling 0.415). The obvious fix
+  — a stronger frozen backbone — was attempted and closed: DINOv2 ViT-S/14
+  triggers 0/40 segments (unfixable in-protocol), DINOv1 ViT-S/8 fires
+  3/40 vs MNV3's 11/40 (section above).
+- **Flow-as-arbiter value is unproven on real failure modes**: mechanism
+  and cost are validated (~0.15 ms/frame amortized), but the synthetic rig
+  lacks the failure modes (real roll, parallax, large calibration error)
+  the cascade exists to catch.
+- **Real gyro path unverified**: the iPhone capture workflow is written,
+  but every real-data number so far uses a SLAM trajectory differentiated
+  into a gyro substitute — and the SLAM copy itself degrades at low
+  texture / fast motion (walking segments: y-axis sign calibration
+  r = −0.42~−0.59). Copy quality and model-class error are two separate
+  failure modes and should not be conflated.
 
 ## Next steps
 
-1. **iPhone field test** (the real experiment): record handheld video + IMU
-   per README; annotate events; run the same eval. This is now the critical
-   path — the screen-recording shortcut is disproven.
-2. Webcam-facing-screen variant if you want a desk-bound intermediate: the
-   camera channel is temporally sharp, but needs a mirror or external camera
-   pointed at the screen (the built-in one films the user).
-3. ~~Downstream training comparison~~ **done on synthetic** (section
-   above): cerebellum clips beat uniform at 4x bytes, and beat the oracle
-   on event recall. Real-data rerun: advantage does not transfer
-   (section above) — queued follow-up: 3-fold cross-segment + seed error
-   bars, then a sparse-physical-event regime test where the trigger
-   should win.
-4. ~~Add accelerometer features to the action vector (translation
-   prediction)~~ **measured, negative** (section above): constant-depth
-   translation warp hurts; needs depth structure (monocular depth /
-   plane models) or stays with the on-demand flow arbiter.
+The previous roadmap round is fully closed (all measured, 2026-09-08/09):
+
+1. ~~Detection-grade synthetic rig~~ **closed, negative** (section
+   above): detection AP is noise-level for every storage method; the root
+   cause is the frozen-feature bottleneck, not the rig.
+2. ~~DINO backbone replacement~~ **closed, negative — route closed**
+   (section above): DINOv2 ViT-S/14 triggers 0/40 segments and the defect
+   is unfixable in-protocol; ViT-S/8 weights are no longer distributed;
+   DINOv1 ViT-S/8 fires 3/40 vs MNV3's 11/40. The published frontend
+   stays optimal.
+3. ~~Protocol-layer interface~~ **done** (section above): the
+   acquisition layer passed its acceptance demo on 1950 real webcam
+   frames.
+
+Open, in priority order:
+
+1. **Flow-arbiter cascade on real failure modes.** Construct or collect
+   data with real roll, parallax, and large calibration error; measure
+   the veto rate. Note the premise has narrowed: on real data the gyro
+   warp does not earn residual quality anyway (walking-level probe), so
+   the cascade's value is the safety net for when the cheap copy breaks —
+   validate it against that claim.
+2. **Paper structures not yet implemented**: ON/OFF opponent channels
+   (two-stage vs one-stage inhibition) and recurrent MG-style
+   acceleration (cell-to-cell diffusion in the pixel path is the embryo).
+3. **iPhone field test — reframed.** No longer "the validation pathway"
+   (real-data behavior is by now well characterized); it is the
+   experiment of whether a real IMU — which does not degrade like the
+   SLAM stand-in at high motion — can flip the walking-level conclusion.
+   Sync recipe: section above.
+4. **Accelerator-friendly implementation**: every operator is a shift +
+   EMA; the whole layer is theoretically sinkable to an ISP/NPU bypass.
+5. **Real-data forward use**: semantic-importance screening is falsified
+   on real egocentric data, but motion dedup / bandwidth pre-screening
+   (drop the clips self-motion already explains) still has the cost
+   account on its side — the natural validation vehicle is the
+   acquisition-layer demo.
