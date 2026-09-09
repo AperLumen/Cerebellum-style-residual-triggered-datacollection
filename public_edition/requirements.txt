@@ -1,0 +1,8 @@
+numpy==2.0.2
+opencv-python-headless==5.0.0.93
+torch==2.8.0
+torchvision==0.23.0
+scipy==1.13.1  # RAFT (third_party) warm-start interpolation
+
+# dev
+pytest==8.4.2
