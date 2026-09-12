@@ -551,21 +551,45 @@ def _open_truncated(path: str, fh: Any, header: dict, size: int,
 
 
 def read_record(path: str) -> Record:
-    """读记录。正常关闭的文件带索引与统计侧车；截断文件顺序可读。"""
+    """读记录。正常关闭的文件带索引与统计侧车；截断文件顺序可读。
+
+    Raises:
+        ValueError: 不是 CMCI 记录文件，或**头本身就不完整**（在写完魔数之后、
+            头落盘之前掉电）。此时无法知道形状与 fps，只能明确拒绝。
+
+    **压力测试发现（2026-09-13）**：本函数此前对"文件短于固定头字段"的情况
+    直接 `struct.unpack`，抛的是原生 ``struct.error: unpack requires a buffer
+    of 4 bytes``——调用方无法用统一的 ``except ContractError/ValueError``
+    处理。对一个**号称掉电安全**的容器，掉电恰好是最该预期到的场景，所以
+    这里必须给出可读、可捕获的失败。footer 路径早已有守卫，头路径漏了。
+    """
     import os
     size = os.path.getsize(path)
     fh = open(path, "rb")
-    magic = fh.read(8)
-    if magic != MAGIC:
+    try:
+        magic = fh.read(8)
+        if magic != MAGIC:
+            raise ValueError(f"不是 CMCI 记录文件: {path}")
+        # 固定头 = 8B magic + 8B footer_off + 4B header_len
+        raw = fh.read(12)
+        if len(raw) < 12:
+            raise ValueError(
+                f"记录头不完整: {path}（读到 {8 + len(raw)} 字节，"
+                "固定头需要至少 20）。文件在写入过程中被截断；"
+                "魔数之后、头落盘之前掉电就会这样。")
+        (footer_off,) = struct.unpack("<Q", raw[:8])
+        (hl,) = struct.unpack("<I", raw[8:12])
+        if hl > size:                   # 头长度不可能超过文件大小
+            raise ValueError(f"记录头损坏: {path}")
+        head_raw = fh.read(hl)
+        if len(head_raw) < hl:
+            raise ValueError(
+                f"记录头不完整: {path}（声明 {hl} 字节，实得 {len(head_raw)}）")
+        header = json.loads(head_raw.decode("utf-8"))
+        payload_off = fh.tell()
+    except Exception:
         fh.close()
-        raise ValueError(f"不是 CMCI 记录文件: {path}")
-    (footer_off,) = struct.unpack("<Q", fh.read(8))
-    (hl,) = struct.unpack("<I", fh.read(4))
-    if hl > size:                       # 头长度不可能超过文件大小
-        fh.close()
-        raise ValueError(f"记录头损坏: {path}")
-    header = json.loads(fh.read(hl).decode("utf-8"))
-    payload_off = fh.tell()
+        raise
 
     if footer_off == 0 or footer_off + 8 > size:
         return _open_truncated(path, fh, header, size, payload_off)

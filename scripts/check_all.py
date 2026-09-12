@@ -115,6 +115,28 @@ def step_fuzz() -> Step:
                 note=f"真·随机采样，seed={seed}（每次运行不同）")
 
 
+def step_fuzz_protocol() -> Step:
+    """协议层压力测试：随机**时序与链路**，而不只是随机值。
+
+    与上一步的分工：`fuzz_contracts.py` 撞单次调用的值域；协议层的失效不在
+    那里——帧数不匹配、时间戳回退/重复、跨段借用、写入中途截断，这些只有
+    **序列**才看得见。本步骤还验证程序**自己声称**的不变量：dataset 的逐帧
+    对齐（写入→读回）、replay() 的无损等价、record 的掉电安全。
+
+    它首次运行就抓到 `read_record` 对截断文件抛原生 `struct.error`——对一个
+    **号称掉电安全**的容器，掉电恰是最该预期的场景却给出不可捕获的异常。
+    另抓到 `build_section` 接受 1 维 gyro（错误拖到写入时才冒）与 NaN 时间戳。
+
+    `--selftest` 用变异测试证明检查器**有检出力**——全绿有可能是"检查器空转"，
+    这也是它跑的一部分。
+    """
+    seed = int(time.time()) % 100000
+    return Step("协议层压测", [PY, "scripts/fuzz_protocol.py",
+                               "--random", "--cases", "40",
+                               "--seed", str(seed)],
+                note=f"随机时序/不变量/链路，seed={seed}")
+
+
 def step_engine_smoke() -> Step:
     """引擎端到端冒烟：真的跑一条录制并导出，确认产物存在。
 
@@ -479,8 +501,9 @@ def main() -> int:
         return 2
 
     steps: list[Step] = [step_tests(), step_pyright(), step_fuzz(),
-                         step_engine_smoke(), step_ui_smoke(), step_doc_refs(),
-                         step_manifest(), step_public_edition()]
+                         step_fuzz_protocol(), step_engine_smoke(),
+                         step_ui_smoke(), step_doc_refs(), step_manifest(),
+                         step_public_edition()]
     if not args.skip_pdf:
         steps += [step_generate_pdf(), step_verify_pdf()]
 
@@ -522,6 +545,16 @@ def main() -> int:
                     f"scripts/ 错误数 {len(loose)} != 基线 "
                     f"{KNOWN_PYRIGHT_ERRORS_SCRIPTS}"
                     "（若是有意改动，请更新基线）")
+        elif st.name == "协议层压测":
+            tail = "\n".join(st.out.strip().splitlines()[-3:])
+            print("    " + tail.replace("\n", "\n    "))
+            m = re.search(r"静默垃圾 (\d+) \| 错误类型不统一 (\d+)", st.out)
+            if not m:
+                problems.append("无法解析协议压测汇总行")
+            elif st.rc != 0:
+                problems.append(
+                    f"协议层不变量被破坏：静默垃圾{m.group(1)} / "
+                    f"错误类型不统一{m.group(2)}（见上方明细）")
         elif st.name == "契约随机污染":
             # 只要读到汇总行就能判断；有问题的明细太长，只在失败时展开
             tail = st.out.strip().splitlines()[-1] if st.out.strip() else ""

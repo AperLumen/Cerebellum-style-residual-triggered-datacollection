@@ -585,3 +585,79 @@ def test_frozen_baseline_z_emits_no_runtime_warning():
             frozen_baseline_z(np.full(400, 1e308))
         # 正常输入：不应有任何警告
         frozen_baseline_z(np.random.default_rng(1).normal(size=(400, 32)))
+
+
+# ------------------------------------------------ 协议层压测找到的三个 bug
+# 背景：fuzz_contracts.py 撞的是**单次调用的值域**。但协议层的失效长在
+# **时序与链路**上，所以另写了 scripts/fuzz_protocol.py 撞序列与不变量。
+# 它首跑就报出三个真问题，全部是"失败出现在与犯错不同的地方"或"不可捕获"。
+
+def test_read_record_rejects_truncated_header_catchably():
+    """读截断的记录必须抛**可捕获**的异常，不能是裸 struct.error。
+
+    对一个**号称掉电安全**的容器，掉电是最该预期的场景。原实现对"文件短于
+    固定头字段"直接 struct.unpack，抛
+    `struct.error: unpack requires a buffer of 4 bytes` —— 调用方没法用
+    `except ContractError/ValueError` 统一处理。footer 路径早有守卫，头路径漏了。
+    """
+    import tempfile
+    import os
+    from cerebellum_cancel import record as rec
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "x.cmcir")
+        with rec.RecordWriter(p, fps=30.0, f_map=42.7, shape=(4, 28, 28),
+                              z_policy="none") as w:
+            for i in range(60):
+                w.append(None, t=i / 30.0, keep=False,
+                         surprise=float(i), score=float(i))
+        raw = open(p, "rb").read()
+        # 头只有 20 字节；截到 0/4/16 都必须给出 ValueError（或契约异常）
+        for cut in (0, 4, 12, 16):
+            fn = os.path.join(td, f"c{cut}.cmcir")
+            open(fn, "wb").write(raw[:cut])
+            with pytest.raises((ContractError, ValueError)):
+                rec.read_record(fn)
+        # 截在中间（帧数据部分）：应当能恢复出完整前缀，且标记 truncated
+        fn = os.path.join(td, "mid.cmcir")
+        open(fn, "wb").write(raw[: len(raw) - 3])
+        got = rec.read_record(fn)
+        assert got.n_frames == 60
+        assert got.truncated is True
+        # 完整文件照常
+        ok = rec.read_record(p)
+        assert ok.n_frames == 60 and ok.truncated is False
+
+
+def test_build_section_rejects_bad_time_axis_at_construction():
+    """t 的契约（1 维、有限、与载荷等长）必须在**构造处**校验。
+
+    时间轴是"逐帧对齐"硬契约的另一半：长度对但时间戳是 NaN，下游按时间对齐
+    就会出错。原实现完全不看 t。
+    """
+    from cerebellum_cancel import dataset as ds
+    g = np.zeros((120, 3))
+    s = np.zeros(120)
+    t_ok = np.arange(120, dtype=np.float64) / 30.0
+
+    for name, bad_t in (
+        ("nan", np.where(np.arange(120) == 50, np.nan, t_ok)),
+        ("inf", np.where(np.arange(120) == 50, np.inf, t_ok)),
+        ("2d", np.zeros((120, 1))),
+        ("len_mismatch", np.arange(90, dtype=np.float64) / 30.0),
+    ):
+        with pytest.raises((ContractError, ValueError)):
+            ds.build_section(f"bad_{name}", bad_t, g, s, s)
+    # 正常输入照常工作
+    sec = ds.build_section("ok", t_ok, g, s, s)
+    assert sec.n_frames == 120
+
+
+def test_build_section_validates_at_construction_not_at_write():
+    """1 维 gyro 必须在 build_section 处就被拒，不能拖到 DatasetWriter.add。
+
+    "失败出现在与犯错不同的调用上"会让调用方很难把两者联系起来。
+    """
+    from cerebellum_cancel import dataset as ds
+    t = np.arange(120, dtype=np.float64) / 30.0
+    with pytest.raises((ContractError, ValueError)):
+        ds.build_section("s", t, np.zeros(120), np.zeros(120), np.zeros(120))

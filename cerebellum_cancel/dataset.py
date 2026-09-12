@@ -227,12 +227,27 @@ def build_section(section_id: str, t: np.ndarray, gyro: np.ndarray,
             自身的均匀参照集，只能做粗筛查（见 ``reference_indices``
             的已知代价）。
     """
-    from .contracts import InsufficientDataError
+    from .contracts import InsufficientDataError, NonFiniteError, ShapeError
     from .integrity import MIN_ANALYSIS_FRAMES, report
 
+    # 时间轴是**这条硬契约的另一半**：`n_frames` 只保证长度一致，
+    # 而 `t` 保证"同一时间轴"这个语义。此前只查了长度，没查 t 本身
+    # ——于是 NaN 时间戳能静默进入数据集（协议层压力测试发现，2026-09-13）。
+    t_arr = np.asarray(t, dtype=np.float64)
+    if t_arr.ndim != 1:
+        raise ShapeError(
+            f"{section_id}: t 必须是 1 维时间轴 (T,)，实得 shape={t_arr.shape}")
+    if not np.all(np.isfinite(t_arr)):
+        n_bad = int(np.count_nonzero(~np.isfinite(t_arr)))
+        raise NonFiniteError(
+            f"{section_id}: t 含 {n_bad} 个 NaN/Inf。时间轴是「逐帧对齐」"
+            "契约的另一半——长度对但时间戳是 NaN，下游按时间对齐就会出错。")
     score = np.asarray(score, dtype=np.float64)
     surprise = np.asarray(surprise, dtype=np.float32)
     n = len(score)
+    if len(t_arr) != n:
+        raise ShapeError(
+            f"{section_id}: t 长度 {len(t_arr)} != score 长度 {n}")
     w = compute_weight(surprise, w_max)
     if keep is None:
         keep_arr = compute_keep(score, fps, trigger_cfg)
@@ -266,12 +281,19 @@ def build_section(section_id: str, t: np.ndarray, gyro: np.ndarray,
             "spike_frames": [],
         }
 
-    return Section(section_id=section_id, t=np.asarray(t, dtype=np.float64),
-                   gyro=np.asarray(gyro, dtype=np.float32), score=score,
-                   surprise=surprise, keep=keep_arr, weight=w, accel=accel,
-                   frames_jpg=(np.asarray(frames_jpg, dtype=object)
-                               if frames_jpg is not None else None),
-                   residual=residual, labels=labels, meta=m)
+    sec = Section(section_id=section_id, t=np.asarray(t, dtype=np.float64),
+                  gyro=np.asarray(gyro, dtype=np.float32), score=score,
+                  surprise=surprise, keep=keep_arr, weight=w, accel=accel,
+                  frames_jpg=(np.asarray(frames_jpg, dtype=object)
+                              if frames_jpg is not None else None),
+                  residual=residual, labels=labels, meta=m)
+    # **在构造处就校验**，而不是拖到 `DatasetWriter.add()`（协议层压力测试
+    # 发现，2026-09-13）：此前 gyro 传 1 维时 `build_section` 兴高采烈地返回
+    # 一个非法 Section，错误直到写入时才冒出来——**失败出现在与犯错不同的
+    # 调用上**，调用方很难把两者联系起来。契约校验应当在"造出这个东西"的
+    # 那一刻发生。
+    sec.validate()
+    return sec
 
 
 # ------------------------------------------------------------------ writer
