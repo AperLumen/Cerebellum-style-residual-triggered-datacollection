@@ -35,6 +35,12 @@ ANCHORS = [
     # 代码/模块名（表里的长标识符，最容易被断行破坏）。
     # 注意：只放 GUIDE.md 里**真实出现过**的路径。`contracts.py` 的全路径在
     # GUIDE.md 里没有（§4.4 只写模块名），拿它当锚点会误报"PDF 缺失"。
+    #
+    # **这些长路径不是"脆弱的锚点"，是有效的检查**：它们同时验证两件事——
+    # ① PDF 渲染没把长标识符吃掉；② 文档里确实还写着实现路径（2026-09-13
+    # 实测：精简 §5.3 时顺手删掉了 `cerebellum_cancel/dataset.py`，本条立刻
+    # 报错，把引用补回去了）。所以要删某条锚点时，先问"是文档不该有它，
+    # 还是我编辑时误删了"。
     "cerebellum_cancel/integrity.py",
     "cerebellum_cancel/dataset.py",
     "tests/test_contracts.py",
