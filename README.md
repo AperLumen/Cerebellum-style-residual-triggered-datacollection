@@ -40,6 +40,12 @@ cerebellum pipeline (the earliest one, while statistics are still converging)
 
 ## Quick start
 
+For the full project guide — method, cost accounting, every experiment including
+the negative results, and the forward-looking deliverables — see
+[`GUIDE.md`](GUIDE.md), also available as a hyperlinked PDF with a bookmark
+outline: [`GUIDE.pdf`](GUIDE.pdf). This README is the executive summary; the
+guide is the self-contained reference.
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/make_synthetic.py --seconds 60 --out data/synthetic
@@ -52,17 +58,49 @@ Run the unit tests:
 PYTHONPATH=. .venv/bin/python -m pytest tests/
 ```
 
+Run everything (tests + type check + doc-reference audit + manifest audit +
+guide PDF rebuild/verify) through one entry point:
+
+```bash
+make check          # fast-fail; use this before committing
+make check-all      # run every step, then summarise
+# equivalent without make:
+PYTHONPATH=. .venv/bin/python scripts/check_all.py
+```
+
+This gate is deliberately strict about two things: the pre-existing 6 errors in
+`tests/test_extract_featmaps_dino.py` are recorded as an **expected baseline**
+(so they can neither hide new failures nor grow), and the shipped package
+(`cerebellum_cancel/`, `tests/`) must keep **0 type errors** while one-off
+probe scripts under `scripts/` are only required not to regress. It has already
+caught two real problems on its first runs: four documents referencing a
+`scripts/eval_weight_value.py` that did not exist, and 4 pre-existing pyright
+errors in `scripts/` that no earlier check had looked at.
+
 A self-contained subset of this repository (package + minimal scripts +
-tests, no datasets) is packaged in `public_edition/`. Its
-`scripts/demo_video.py` renders a side-by-side demo video (raw frame |
-residual heatmap | HUD) from any sequence — the same script also exists
-at `scripts/demo_video.py`:
+tests, no datasets) is packaged in `public_edition/`. It ships the **online
+acquisition layer**: cancellation (`core`, `featmap_cancel`, `rotwarp`),
+the pluggable `acquisition` API, the `pipeline`, and the input `contracts`.
+The offline dataset layer (`integrity`, `dataset`) is deliberately omitted —
+none of the claims above depend on it, and its contract tests are omitted
+with it. Its `scripts/demo_video.py` renders a side-by-side demo video (raw
+frame | residual heatmap | HUD) from any sequence — the same script also
+exists at `scripts/demo_video.py`:
 
 ```bash
 cd public_edition && pip install -r requirements.txt
 PYTHONPATH=. python scripts/make_synthetic.py --out demo_scene
+PYTHONPATH=. python scripts/run_experiment.py demo_scene   # cerebellum recall 1.00 vs uniform 0.17
 PYTHONPATH=. python scripts/demo_video.py --src demo_scene --out demo_video.mp4
 ```
+
+`make check` also guards this subset: its shared files must stay
+**byte-identical** to the main tree and its tests must pass in isolation. That
+check exists because the subset once silently fell months behind (6 missing
+modules, 4 drifted shared files) while its own tests still passed — staleness
+with no signal. To be explicit about the trade-off: the subset is a **copy, not
+a branch**, so any fix must land in the main tree first and then be synced;
+editing `public_edition/` directly will be flagged as drift.
 
 ## Real capture with an iPhone
 
@@ -823,6 +861,267 @@ PYTHONPATH=. .venv/bin/python scripts/train_downstream_event_zreadout.py data/ao
     --seeds $(seq 25)
 ```
 
+## Inference-time gating: a different question, same answer (negative result)
+
+Every test above asked whether residual-selected data **trains** a better
+model per stored byte. One deployment story was never tested: use the
+0.03 ms residual layer as an **always-on wake gate** — the heavy model
+stays off and only runs on triggered frames. The criterion is different
+and could hold independently of the training-value result: a signal with
+zero class-discriminative power can still be good at marking **when**
+something happened. So it was measured on its own terms — wake cost vs
+event capture, plus **wake latency**.
+
+The controls matter here. Two deployment semantics have different cost
+models and different nulls, so both are reported:
+
+* **wake semantics** (heavy model runs only on triggered frames; frames
+  may be scattered) — null = **random frame scatter**
+* **clip semantics** (the project's storage convention: pre/post roll,
+  merge, min length) — null = **random 1 s bursts**
+
+This distinction is not cosmetic: 5% of frames thrown at random into 1 s
+intervals already covers ≈79% of them (birthday-problem arithmetic, not
+information). Comparing a scattered-frame gate against contiguous bursts
+would credit the gate for the wrong reason.
+
+10 event segments, 200 random draws per budget per segment
+(`scripts/run_gate_operating_curve.py`,
+`runs/gate_operating_curve.json`), medians:
+
+```
+wake semantics
+budget  gateCap  randCap  randP95  gateRaw  gateOnset
+0.5%    0.136    0.282    0.589    0.119    0.000
+1%      0.279    0.525    0.841    0.252    0.000
+2%      0.464    0.782    1.000    0.464    0.000
+5%      0.775    0.977    1.000    0.775    0.054
+10%     1.000    0.999    1.000    1.000    0.477
+
+clip semantics
+budget  gateCap  uniform  randBurst  oracle
+2%      0.000    0.000    0.077      0.929
+5%      0.014    0.000    0.192      1.000
+10%     0.100    0.464    0.319      1.000
+20%     0.450    1.000    0.560      1.000
+```
+
+**The gate loses to random scatter at every budget**, worst at the low
+budgets a real gate would run at (0.464 vs 0.782 at 2%). Under clip
+semantics it also trails uniform sampling (0.100 vs 0.464 at 10%).
+Frame-level AUC of the score against the event intervals is **0.510**
+(chance), matching the earlier 0.47 measured against human action labels.
+
+**Onset capture is 0.000 for every budget up to 2%** (0.054 at 5%): at the
+budgets a gate would actually run at, it never wakes within 0.5 s of an
+event starting — which is the only moment a "grasp failure" downstream
+could use.
+
+Why it loses was decomposed into two separately falsifiable parts
+(`scripts/diag_gate_vs_random.py`, `runs/diag_gate_vs_random.json`), and
+**both hold**:
+
+* **A — the signal is uninformative.** Frame-level enrichment (share of
+  top-k score frames inside event intervals, over base rate) has median
+  0.640 at 2% budget and **8 of 10 segments below 1.0** — the highest
+  scoring frames lean **away** from events, not toward them.
+* **B — the structure penalises coverage.** At 0.5% budget the gate emits
+  8 runs where random scatter emits 21 (2.6–3.1× fewer at every budget),
+  mean run length 1.9–2.9 frames. For "was any frame kept in this
+  interval", spreading beats clustering at equal frame cost.
+
+So it is not a tuning problem or a readout problem.
+
+Two side findings. First, the framing's premise was checked directly:
+"the earlier low recall is because the ground-truth annotation is too
+broad" does **not** hold at the data level — the 89 intervals have median
+duration **1.00 s** (71/89 ≤ 1 s), cover **9.9%** of time on average, and
+`labels.npy` matches `events.json` at **IoU 1.0000**. The intervals are
+clean; the signal is the problem. Second, per-segment storage exposed a
+**real defect** (below).
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/run_gate_operating_curve.py data/aoe_event \
+    --preds shift,rotation --n-rand 200
+PYTHONPATH=. .venv/bin/python scripts/diag_gate_vs_random.py
+```
+
+## Adaptive-trigger gate latches open: a real defect, found and fixed
+
+The sparse-event section above reports cerebellum at "23.4% stored". That
+average is misleading. Per segment the released trigger stores:
+
+```
+seq_000 0.992  seq_001 0.060  seq_002 0.958  seq_003 0.050  seq_004 0.109
+seq_005 0.026  seq_006 0.000  seq_007 0.014  seq_008 0.086  seq_009 0.045
+                median 0.055, mean 0.233
+```
+
+A bimodal distribution: **2 of 10 segments store 96–99%** (the gate
+**latches open**) and 1 stores 0.0% (misses every event), while the other
+8 work as designed (1.3–10.7%, comparable to the 3.3–26.3% annotation
+coverage).
+
+Mechanism (`scripts/diag_gate_lock.py`, `runs/diag_gate_lock.json`):
+`AdaptiveTrigger` normalises its score by a running mu/var, and that
+baseline is updated **only on frames that are outside a clip AND below
+the onset threshold**. Under dense surprise the update never runs again,
+the normaliser freezes, z stays above threshold forever, and the gate
+never releases. The latched segments measure `blocked = 1.00` (the stat
+update was blocked on every frame), z median 12.53 / 59.34 against an
+onset bar of 6.
+
+This is the same failure class as the gated-statistics freeze documented
+earlier — the one fixed by `CancelConfig.robust` inside `FeatureMapCancel`
+— recurring one level up in the trigger's own normaliser, which had been
+left un-latched.
+
+Fix: `TriggerConfig(robust=True)` — winsorized always-update (outliers
+enter the EMA clipped at 3σ, unconditionally), mirroring the layer below.
+
+```
+                        locked open   stored mean   stored median   capture median
+released (robust=False)  2/10          0.234         0.055           0.343
+fixed    (robust=True)   0/10          0.034         0.032           0.268
+```
+
+> **Honesty note:** median capture *falls* from 0.343 to 0.268 with the
+> fix. That is not a regression — the two latched segments' 1.00 capture
+> was bought by storing ~100% of the stream, which is worthless as
+> gating. Quote the number with this explanation.
+
+The default stays `robust=False` so no published number changes (verified:
+the default reproduces seq_000's 0.9918). Regression tests:
+`tests/test_gate_stats.py` (6 tests, including "default does not latch"
+and "the fix does not suppress a real event"). Full suite: 102 passed,
+6 errors — the 6 are the pre-existing failures from the deleted synthetic
+frames.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/diag_gate_lock.py data/aoe_event
+PYTHONPATH=. .venv/bin/python -m pytest tests/test_gate_stats.py -q
+```
+
+**Where this leaves the protocol layer.** Across the training-value line,
+the gating line and the integrity-audit exploration, the scope collapses
+to one consistent sentence: the residual trigger answers *where something
+moved*, not *what happened*, and not *when it is worth running a heavy
+model*. The uses that survive measurement on real egocentric data are
+recording-level integrity inspection and the cost account itself;
+semantic arbitration and gate decisions have to happen on the vision-model
+side.
+
+## The gate line, closed properly: target definition and labeled ceiling
+
+Two objections were still open after the gating negative above, so both
+were tested (`scripts/probe_event_moment_signals.py`,
+`scripts/train_labeled_gate_upper_bound.py`;
+GUIDE.md §2.3.8).
+
+**Objection 1 — "you scored the wrong target".** The gate curve scored the
+WHOLE annotated interval, but the residual is mechanistically a change
+detector: it should fire at content *transitions*, not throughout a 1–8 s
+interval. So the same signals were scored against four target definitions
+(boxcar / onset / offset / bounds) at matched tolerance, for six signals
+spanning the cheapest to most informed available without frames:
+
+```
+signal              boxcar   onset   offset   bounds
+resid_shift          0.516   0.499   0.552   0.536
+resid_rotation       0.510   0.484   0.538   0.537
+naive_fm (no IMU!)   0.547   0.539   0.567   0.556
+feat_diff            0.500   0.465   0.570   0.523
+feat_novelty         0.531   0.510   0.590   0.538
+feat_jerk            0.491   0.479   0.574   0.534
+```
+
+Switching to transitions does help directionally (`offset` beats `onset`
+consistently — an object's disappearance is also a change), but **all 24
+signal × target cells stay in 0.5–0.6 and none reaches p < 0.05** (exact
+sign test over 10 segments; the best three sit at p = 0.109). The sharpest
+result is the head-to-head: the residual — IMU compensation, per-cell
+negative images, robust statistics — is **indistinguishable from the
+dumbest possible baseline, an uncompensated feature-map frame difference**
+(5/10 segments, p = 1.000). So the gating failure is neither a burst
+structure artifact nor a target-definition artifact.
+
+**Objection 2 — "then just train it".** Fair, and it is the one quantity
+the previous three rounds left unmeasured. kNN label consistency on the
+576-d frozen features, leave-one-segment-out, threshold calibrated on the
+training segments only:
+
+```
+variant      frame AUC                  AUC(bounds)
+raw          0.478 (3/10 > 0.5, p=0.34)  0.445 (2/10, p=0.11)
+raw+time     0.478 (3/10 > 0.5, p=0.34)  0.447 (2/10, p=0.11)
+
+same-scene (optimistic bound): AUC 0.589 (6/7, p=0.13), onset capture 0.188
+```
+
+Cross-scene is **below chance** — neighbours match similar scene/hand
+appearance rather than event-ness (measured: on seq_005, frames with a
+nonzero score have a *lower* event rate, 0.030, than frames scoring exactly
+zero, 0.0475). Adding temporal channels changes nothing (+0.005).
+Everything in this project runs on 1–8 s coarse intervals with frame-level
+binary targets, so even *with* labels the same-scene ceiling is ≈0.59 AUC.
+
+**Conclusion: the bottleneck is supervision granularity, not signal
+processing.** Closed. Re-opening needs finer event-moment labels or the
+downstream task's own failure labels — neither of which the existing data
+can provide. Two hypotheses were falsified along the way (label-prior
+shift, r = +0.101, wrong sign; temporal channels add nothing, p = 0.11) and
+one experiment design was wrong and is recorded as such (a first-half/
+second-half within-scene split degrades to AUC 0.500 on 6 of 10 segments
+because events are bunched and the pool ends up with no positives).
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/probe_event_moment_signals.py data/aoe_event
+PYTHONPATH=. .venv/bin/python scripts/train_labeled_gate_upper_bound.py data/aoe_event
+```
+
+## Multimodal dataset layer (the forward-looking deliverable)
+
+Every claim above was tested and mostly falsified, but the *infrastructure*
+results held across regimes: the 0.033 ms IMU copy (vs 8.5 ms optical flow),
+the 0.17 ms whole layer, bit-exact decision replay, resume-equals-uninterrupted,
+and the integrity sentinel. Those are now packaged as a dataset format instead
+of scattered scripts — see GUIDE.md §4.2,
+`cerebellum_cancel/dataset.py`, `cerebellum_cancel/integrity.py`.
+
+**One hard contract:** every payload's axis 0 is the same frame index and
+equals `n_frames`, validated on **write and read**. `score` must be float64
+(the lossless decision contract) — the writer refuses to quantize it.
+
+**Three deliverables:** (1) modality-aligned trainable samples (video / gyro /
+accel / residual on one time axis), (2) a per-frame `weight`, (3) a per-section
+`integrity` marker.
+
+**`weight` is a claim, not a finding.** It is the residual's *incompressibility*
+(a per-byte information-density weight for balanced-difficulty sampling) — **not**
+semantic importance and **not** event timing, both of which four rounds falsified.
+The manifest and the auto-generated README both stamp it
+`CLAIM, NOT ESTABLISHED`; `scripts/eval_weight_value.py` has **not** been run.
+
+Built so far (`data/cmci_ds_aoe_event`): 10 sections / 36,782 frames / 0.9 MB
+(25 B/frame), `frames=none` because the source keeps no frames — so video and
+accel are declared **absent** rather than faked. The video+accel path was
+verified end-to-end on `data/real_imu` (400 frames, 15,831 B/frame).
+
+**Sentinel honesty.** It does recording-level screening from a segment's own
+reference set, and it provably **misses sparse faults**: 10% of frames form the
+reference set, so injected spikes land inside it and define "normal" (measured:
+5 injected 40× spikes in 4000 frames, all 5 undetected, threshold pushed to 53.2
+while their z stayed at 17.7). Reliable sparse detection needs an independent
+healthy recording from the same scene/device. This matches the earlier
+coverage-floor result (~40% coverage needed).
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/build_dataset.py \
+    --source data/aoe_event --out data/cmci_ds_aoe_event \
+    --frames none --max-frames 6000
+PYTHONPATH=. .venv/bin/python -m pytest tests/test_dataset.py -q
+```
+
 ## Walking-level segments: "more motion, more value" falsified (negative result)
 
 The one remaining defense of the corollary discharge on real data was
@@ -841,18 +1140,28 @@ DIS flow          0.105  (best, all 4)            8.5
 ```
 
 Falsified, with a mechanism: at walking scale the gyro warp is worse
-than no compensation on 3 of 4 segments (+11% mean calm residual) — the
-model-class error the rotation-only shift cannot see (translation,
+than no compensation on 3 of 4 segments (+11% mean calm residual) —
+the model-class error the rotation-only shift cannot see (translation,
 parallax, rolling shutter) grows with motion, and the SLAM-derived copy
 itself degrades (y-axis sign calibration drops to r = −0.42~−0.59).
 Flow still wins on quality (−26%) and still loses on cost by ~250x.
 Combined with desk (neutral) and high-motion (−12%) results: **the gyro
 warp has never beaten naive on real data at any measured motion scale.**
-The residual-quality advantage is a property of the synthetic regime,
-where the event is the only unpredictable motion in the frame. The
-protocol layer keeps its cross-regime asset — the copy costs 0.033 ms
-vs flow's 8.5 ms, measured here too — but on real video "motion dedup by
-cheap warp" is a cost play, not a quality play.
+
+> **This section's conclusion was later partly retracted.** Two
+> follow-ups (see the next two sections) showed that the original
+> reading — "the residual-quality advantage is a synthetic-regime-only
+> property" — does not survive. The axis ablation shows the walking-level
+> failure is dominated by one omitted, cheaply fixable axis (roll); and
+> a hardware-gyroscope session shows that with a clean copy a
+> three-axis homography *does* buy a gain on real hand-held video. What
+> **does** stand is the narrower statement: the *shipped* two-axis
+> translation predictor fails here. We keep the original text so the
+> correction is visible rather than quietly overwritten.
+
+The protocol layer keeps its cross-regime asset — the copy costs
+0.033 ms vs flow's 8.5 ms, measured here too — so on real video "motion
+dedup by cheap warp" remains a cost play rather than a quality play.
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/select_walk_segments.py
@@ -865,6 +1174,164 @@ PYTHONPATH=. .venv/bin/python scripts/extract_featmaps.py data/aoe_motion_walk
 PYTHONPATH=. .venv/bin/python scripts/run_flow_eval.py data/aoe_motion_walk \
     --n-train 0 --n-val 4 --robust
 ```
+
+## Axis ablation: the walking-level failure is roll, not translation
+
+The section above explained the walking-level failure as "model-class
+errors (translation, parallax, rolling shutter)" — a diagnosis with no
+ablation behind it. `scripts/analyze_negatives.py` decomposes it: the
+shipped predictor is a pure 2-D translation driven by yaw and pitch, and
+it is compared against rotation models built from subsets of the three
+gyro axes, each a plane-at-infinity homography `H = K R K⁻¹`. Per-axis
+signs are fitted on the first 25% of each segment and frozen, then
+evaluated on the held-out second half (`runs/negative_followups.json`).
+
+```
+                                  walking level (gyro p95 >= 60°/s)
+warp model                  all frames     high-motion quartile
+naive (no warp)                ---               ---
+shipped 2-D shift (yaw+pitch)  -6.3%            -13.8%
+yaw only                       +1.9%             +3.3%
+pitch only                     +2.7%             +3.8%
+roll only                      +4.2%             +8.0%   <- the omitted axis
+yaw+pitch (homography)         +3.2%             +5.2%
+all three (homography)         +5.8%            +11.7%
+```
+
+**Roll alone recovers more than yaw and pitch combined**, despite having
+no depth information and the smallest focal-length leverage — and roll
+is camera motion, exactly what a corollary discharge is supposed to
+cancel. On the segments the shipped model lost badly (up to −19%), the
+full three-axis homography turns every one positive. The fix costs a
+factor of two (0.033 → 0.071 ms/frame), not twenty.
+
+`scripts/check_axis_window_stability.py` then audits whether that
+ordering is a property of the data or of the measurement, under a 2×2
+grid of evaluation window × metric scope, on the de-duplicated pool
+(`runs/axis_window_stability.json`):
+
+```
+motion level   metric      roll only   yaw+pitch   all three   2-D shift
+walking (n=6)  interior      +3.90%      +2.96%      +5.53%      -7.82%
+walking (n=6)  full frame    +3.54%      +0.41%      +3.22%      -8.71%
+desk/mid (n=5) interior      +1.28%      +3.16%      +3.41%      -1.17%
+desk/mid (n=5) full frame    +1.24%      +2.36%      +2.60%      -1.40%
+```
+
+Two things follow. The roll-over-yaw+pitch ordering at walking level is
+metric- and window-independent, so it is a real property of the data;
+the *pooled* ordering is not (pooling flips it), which is why the
+motion-level split is the right way to state the result. And the full
+three-axis homography is the only model positive under all four
+combinations — that is the operational conclusion, not a per-regime
+choice.
+
+Note also that this ablation caught a **duplicate**: `aoe_event/seq_007`
+and `aoe_motion/seq_001` are byte-identical (same MD5 for both the
+feature maps and the IMU stream), so the "12 segments" of the
+cross-validation below are 11 distinct recordings. De-duplicating moves
+means only in the second decimal.
+
+## Genuine gyroscope: the copy-quality escape route, closed
+
+Every real-data result above rests on a *substitute* corollary
+discharge: the gyro is obtained by differencing a visual-SLAM camera
+trajectory, so it inherits SLAM's failure modes exactly where
+self-motion cancellation matters most. `scripts/prep_real_imu.py` +
+`scripts/run_real_imu_eval.py` replace it with a **real phone
+gyroscope** (hand-held Galaxy S21, 1088² frames @ ~28 fps, nanosecond
+timestamps, 500 frames = 17.9 s, frame-interval jitter 74%;
+`data/real_imu`, `runs/real_imu_eval.json`). Calibration is
+correlation-for-axes plus a least-squares slope for focal length
+(the raw stream is already rad/s — do **not** apply `np.radians()` on
+top of it), giving a 36° field of view.
+
+Copy quality comes out at **r = +0.958, R² = 0.87** — against 0.18–0.93
+for the SLAM substitute, and the best in the project. On that clean
+copy, with the same front end:
+
+```
+predictor                    full-frame  vs naive   calm    ms/frame
+naive (no compensation)         0.394     1.000    0.295     0.056
+gyro + yaw/pitch shift (shipped) 0.538    1.36x    0.440     0.088
+gyro + three-axis homography    0.330     0.84x    0.284     0.148
+DIS optical flow                0.241     0.61x    0.207     4.30
+```
+
+**The prediction inverts**: the shipped two-axis translation makes the
+residual *worse* (1.36×) while the three-axis homography makes it
+*better* (0.84×) — a swing of ~60% of the naive residual from changing
+the predictor alone. Per-pixel control on the 100 highest-rotation frame
+pairs is starker: 1.433× for the constant-translation approximation vs
+0.614× for full rotation. So at least part of the long-standing
+real-data negative was the *predictor*, not the data and not the copy.
+This does not re-open the walking-level result (that evaluation has not
+been re-run with the homography), but it does correct its explanation.
+
+**Three convention bugs found while building this, each of which
+inverted a measured conclusion.** All three are silent — no error, just
+plausible numbers that are wrong:
+
+1. **The warp was applied backwards.** `cv2.warpPerspective` implements
+   `dst(x) = src(H⁻¹x)` by default, so passing `H` without
+   `WARP_INVERSE_MAP` warps the prediction in the *opposite* direction:
+   a gain of several percent becomes a loss of several percent. This is
+   invisible in residual numbers (they merely look somewhat worse) and
+   misled two rounds of debugging before a point-source test exposed it.
+   The check to keep: a rotation warp and the calibrated translation
+   model must move the same point to the same place.
+2. **Axis signs and that flag are a *joint* convention.** Flipping all
+   three signs is numerically equivalent to dropping `WARP_INVERSE_MAP`
+   — measured identical at 0.9655. So adding the flag *required*
+   inverting every stored sign; doing one without the other gives 1.29×
+   where 0.84× is correct. Sign tables are meaningless without their
+   flag state, so both are now recorded together and locked by tests.
+3. **The gyro time-alignment is dataset-dependent.** Whether the stored
+   reading describes the (t−1 → t) step or the next one is a property of
+   each dataset's preparation, and the two datasets here are opposite:
+   the phone session improves 0.906 → 0.835 when paired with the
+   *previous* frame, while AoE (whose differencing stores the (t−1 → t)
+   rotation directly) is better with the current frame. Generalising the
+   phone result to both datasets suppressed part of the AoE gain. Now
+   declared per source (`rotwarp.DATASET_CONVENTIONS`) and validated on
+   held-out data.
+
+What remains as an upper bound rather than a claim:
+`scripts/oracle_aoe_shift.py` exhaustively searches, per frame, the pure
+translation that best predicts the next frame — an oracle using no
+estimator and no learned model. It recovers roughly three times the
+residual the gyro-driven rotation warp achieves on the AoE segments
+(about +4.8–6.2% vs +1.4–2.7% across three time windows), and the
+gyro's predicted displacement correlates with it at +0.43–0.45. So the
+copy is informative and the rotation-only model is leaving most of its
+own signal unused: **the leading open item is the translation term**
+(`CancelConfig.trans_scale` is already reserved for a constant-depth
+version; what is missing is a 1/Z calibration).
+
+```bash
+# download + calibrate (first time), then evaluate
+PYTHONPATH=. .venv/bin/python scripts/prep_real_imu.py \
+    data/real_imu_raw/data_1714767956 --out data/real_imu/val/seq_000
+PYTHONPATH=. .venv/bin/python scripts/run_real_imu_eval.py \
+    data/real_imu/val/seq_000 --n 400
+
+# the controls that establish the gains are real motion compensation
+PYTHONPATH=. .venv/bin/python scripts/control_aoe_gain.py --force
+PYTHONPATH=. .venv/bin/python scripts/oracle_aoe_shift.py --force
+PYTHONPATH=. .venv/bin/python scripts/check_axis_window_stability.py --force
+```
+
+> **Reproducibility caveat (unresolved).** The absolute residuals of the
+> genuine-gyro table cannot be reproduced from the current code: a
+> re-run gives naive 0.3945 (and 1.36× / 0.84×) where the original run
+> gave 0.3704 (and 1.308× / 0.876×). naive depends on none of the code
+> that changed — no focal length, no warp — so the discrepancy is in the
+> frame-reading chain. Ruled out: frame contents (byte-identical MD5),
+> resize (224/256/192/160), grayscale, CPU vs MPS, frame count
+> (350–500), focal-length version (42.674 vs 43.13). **Not located.**
+> What is stable is magnitude and direction: ordering, signs and ratios
+> agree across both readings (shift ~1.3–1.4×, homography ~0.84–0.88×,
+> flow ~0.61–0.66×), so quote ratios rather than absolute residuals.
 
 ## Detection-grade downstream rig (negative result: frozen-feature bottleneck)
 
@@ -1006,6 +1473,27 @@ PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
   storage methods (zero-signal collapse). On real data the trigger answers
   "where did something move", not "what happened"; semantic importance
   arbitration must live in the vision model upstream of this layer.
+- **The residual does not carry "when" either, so inference-time gating
+  fails too** (measured, 2026-09-12; 10 event segments × 200 random
+  controls). Frame-level AUC 0.510 (chance); frame-level enrichment median
+  below 1 (top-scoring frames lean *away* from events); under wake
+  semantics it **loses to random frame scatter** (0.464 vs 0.782 at 2%
+  budget); onset capture is **0.000** at every budget up to 2% — it never
+  wakes within 0.5 s of an event starting, which is the only moment a
+  grasp-failure downstream could use. Decomposed into two independent
+  causes, both confirmed: uninformative signal (A) and a clustering
+  structure unfavourable to interval coverage (B). See
+  GUIDE.md §2.3.8.
+- **Retargeting to transition moments does not rescue it, and neither does
+  supervision** (measured, 2026-09-12). Scoring four target definitions
+  (boxcar/onset/offset/bounds) × six signals leaves all 24 cells in
+  0.5–0.6 with **none significant** (best p=0.109); the fully-featured
+  residual is indistinguishable from an uncompensated feature-map frame
+  difference (5/10 segments, p=1.000). With labels allowed, kNN on frozen
+  features reaches only **0.589 AUC within one scene** and **0.478 across
+  scenes (below chance)** — so the bottleneck is supervision granularity
+  (1–8 s intervals, frame-level binary), not signal processing. See
+  GUIDE.md §2.3.8.
 - **The gyro warp has never improved real-data residual quality** at any
   measured motion scale (desk: physically neutral; high-motion pair: −12%;
   walking-level: +11%, worse than naive on 3/4 segments). The resolution
@@ -1021,12 +1509,33 @@ PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
   and cost are validated (~0.15 ms/frame amortized), but the synthetic rig
   lacks the failure modes (real roll, parallax, large calibration error)
   the cascade exists to catch.
-- **Real gyro path unverified**: the iPhone capture workflow is written,
-  but every real-data number so far uses a SLAM trajectory differentiated
-  into a gyro substitute — and the SLAM copy itself degrades at low
-  texture / fast motion (walking segments: y-axis sign calibration
-  r = −0.42~−0.59). Copy quality and model-class error are two separate
-  failure modes and should not be conflated.
+- **Real gyro path: one session, not a distribution.** Every earlier
+  real-data number used a SLAM trajectory differentiated into a gyro
+  substitute, which degrades at low texture / fast motion (walking
+  segments: y-axis sign calibration r = −0.42~−0.59). That substitution is
+  now discharged for one hand-held session with a hardware gyroscope
+  (r = +0.958, R² = 0.87), which is where the corrected real-data
+  conclusion comes from — but it is a single 17.9 s session on a single
+  device, and the walking-level and downstream evaluations have **not**
+  been re-run with the three-axis homography. Copy quality and
+  model-class error are two separate failure modes and should not be
+  conflated.
+- **The translation term is unmodelled.** The oracle bound (exhaustive
+  per-frame search for the best pure translation, no estimator, no
+  learned model) recovers roughly three times what the gyro-driven
+  rotation warp achieves on AoE (+4.8–6.2% vs +1.4–2.7%), while the
+  gyro's predicted displacement correlates with that oracle at
+  +0.43–0.45. So the copy is informative and the model is discarding most
+  of its signal; `CancelConfig.trans_scale` reserves the slot but there is
+  no 1/Z calibration yet. This is the largest quantified, uncollected gain
+  in the project.
+- **Absolute residuals of the genuine-gyro experiment are not
+  reproducible.** naive 0.3704 → 0.3945 on a re-run, and naive depends on
+  none of the code that changed (no focal length, no warp). Ruled out:
+  frame contents (byte-identical MD5), resize (224/256/192/160),
+  grayscale, CPU vs MPS, frame count (350–500), focal-length version
+  (42.674 vs 43.13). **Not located.** Ratios are stable across both
+  readings, so the reports quote ratios; see the caveat box above.
 
 ## Next steps
 
@@ -1046,20 +1555,34 @@ The previous roadmap round is fully closed (all measured, 2026-09-08/09):
 
 Open, in priority order:
 
-1. **Flow-arbiter cascade on real failure modes.** Construct or collect
+1. **Add the translation term.** This is now the highest-value item
+   because it rests on a measured upper bound rather than an argument:
+   the exhaustive oracle recovers ~3× what the rotation-only model does
+   on real footage, and the gyro signal correlates with that oracle at
+   +0.43–0.45. What is missing is a 1/Z calibration for the
+   constant-depth translation term the predictor already reserves
+   (`CancelConfig.trans_scale`).
+2. **Re-run the walking-level and downstream evaluations with the
+   three-axis homography.** The axis ablation and the genuine-gyro
+   session both show the shipped 2-D predictor is the wrong model, but
+   the trigger behaviour and clip-selection value have not been
+   re-measured with the homography in place. Expect a modest improvement
+   in stored-clip quality, not a reversal of the semantic-importance
+   conclusion.
+3. **Hardware-IMU breadth.** One session established that a clean copy
+   inverts the prediction; multiple sessions, devices and motion levels
+   are needed before the corrected boundary can be stated as a
+   distribution. This is what would let the walking-level result be
+   restated on real gyro rather than on the SLAM substitute.
+4. **Flow-arbiter cascade on real failure modes.** Construct or collect
    data with real roll, parallax, and large calibration error; measure
-   the veto rate. Note the premise has narrowed: on real data the gyro
-   warp does not earn residual quality anyway (walking-level probe), so
-   the cascade's value is the safety net for when the cheap copy breaks —
-   validate it against that claim.
-2. **Paper structures not yet implemented**: ON/OFF opponent channels
+   the veto rate. The cascade's job has shifted: with the roll-aware
+   homography it needs to detect the failure modes the 3-axis model
+   *cannot* express (translation and parallax), which is a cleaner and
+   better-posed veto criterion than before.
+5. **Paper structures not yet implemented**: ON/OFF opponent channels
    (two-stage vs one-stage inhibition) and recurrent MG-style
    acceleration (cell-to-cell diffusion in the pixel path is the embryo).
-3. **iPhone field test — reframed.** No longer "the validation pathway"
-   (real-data behavior is by now well characterized); it is the
-   experiment of whether a real IMU — which does not degrade like the
-   SLAM stand-in at high motion — can flip the walking-level conclusion.
-   Sync recipe: section above.
 4. **Accelerator-friendly implementation**: every operator is a shift +
    EMA; the whole layer is theoretically sinkable to an ISP/NPU bypass.
 5. **Real-data forward use**: semantic-importance screening is falsified
@@ -1067,3 +1590,18 @@ Open, in priority order:
    (drop the clips self-motion already explains) still has the cost
    account on its side — the natural validation vehicle is the
    acquisition-layer demo.
+6. ~~Inference-time gating~~ **closed, negative** (section above,
+   2026-09-12): the gate loses to random frame scatter on real data
+   (0.464 vs 0.782 at 2% budget) and never wakes within 0.5 s of an event
+   onset at the budgets a gate would run at (onset capture 0.000 up to
+   2%). A downstream that needs gating has to find its signal on the
+   vision-model side. Side product: a real defect in `AdaptiveTrigger`
+   (gate latching open, 2/10 segments) was found and fixed
+   (`tests/test_gate_stats.py`).
+7. ~~Better signal for the gate / better filter~~ **closed, negative**
+   (section above, 2026-09-12): retargeting to transition moments leaves
+   24/24 cells insignificant, and with labels allowed the same-scene
+   ceiling is only 0.589 AUC (cross-scene 0.478). Re-opening this line
+   needs **finer supervision** — single-frame event moments, or the
+   downstream task's own failure labels — which no existing dataset here
+   provides. A better filter is not the missing ingredient.

@@ -1,0 +1,574 @@
+% 编译方式:xelatex(推荐)——ctexart 需要支持中文的引擎
+\documentclass[UTF8,12pt,a4paper]{ctexart}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{caption}
+\captionsetup{font=small,labelsep=quad}
+% 中文段落里夹着英文术语、$\times$、数据集路径这类不可断的长串(unbreakable
+% token),默认断行会溢出到版心外。让 TeX 在最后一遍拉伸词间距来吸收它们——
+% 与英文版用同一处理方式。
+\setlength{\emergencystretch}{3em}
+
+\title{残差触发数据采集:从小脑式感觉预测到一个数据采集协议层\\——一个从 0 到 1 的综述}
+\author{}
+\date{2026 年 9 月}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+相机正在从``按需开启''变成``常开'':家用机器人、AR 眼镜、车载与机械臂上的相机每天产生数百 GB 原始视频,而其中真正被事后利用的往往只有百分之几。为 100\% 的数据支付 100\% 的存储、带宽与标注成本,换回个位数百分比的价值——这一存储--价值不对称是 always-on 感知时代数据采集面临的核心问题。本文综述一条从神经科学出发、落到工程协议的解决路线:\textbf{残差触发数据采集(residual-triggered data acquisition)}。其核心思想借鉴小脑样感觉结构(cerebellum-like circuit)中``伴随放电--负像--残差''三元件结构:设备不检测``什么是重要的'',而是预测``什么变化是自己造成的'',只存储预测不掉的残差。本文按从 0 到 1 的顺序组织:(1) 生物学源头——电鱼弱电感觉系统中的伴随放电与负像学习,以及 Perks 等人 2026 年发表于 \emph{Nature} 的连接组学证据;(2) 思想谱系——从 Helm\-holtz 的无意识推理、von Holst 的再传入原理、Marr--Albus--Ito 小脑学习理论到 Rao \& Ballard 的预测编码;(3) 工程中的同源结构——视频编码残差、背景建模、声学回声消除与事件相机;(4) 一个具体原型系统的设计、成本账与全部实验证据,包括正面结果与一组带统计支撑的负结果;(5) 最后总结可迁移的设计原则与适用边界。文中所有数字均来自一个可复现的开源原型项目。
+\end{abstract}
+
+\textbf{关键词:}残差触发数据采集;伴随放电;负像;小脑样回路;感觉预测;数据筛选层;IMU;事件检测
+
+\tableofcontents
+\newpage
+
+\section{引言:常开相机的存储--价值不对称}
+
+\subsection{问题}
+
+相机正在从``按需开启''变成``常开''。三个具体场景可以说明问题的量级:
+
+\begin{itemize}
+  \item \textbf{机器人学抓取}:相机 30 fps 常开,一天产生约 270 GB 原始视频。一个月后工程师回看时,只想找``抓取失败''的那几十段——它们通常占不到 3\%。
+  \item \textbf{AR 眼镜}:一个月全量录像约 8 TB,且 97\% 的画面是无意义的走廊与天花板;全量上传则在隐私上不可接受。
+  \item \textbf{具身语料采集}:以 Open-AoE\cite{openaoe} 这类第一人称操作数据集为代表,要采数千小时视频再人工标注,标注成本与视频时长成正比,而其中真正稀有的是失败、意外与长尾动作。
+\end{itemize}
+
+这些场景的共性是:\textbf{存是线性花钱的,价值不是。} 数据通路里缺的是一个\textbf{筛选层}:只把``值得存''的百分之几留下来。这个筛选层有三个硬约束:
+
+\begin{enumerate}
+  \item \textbf{极便宜}——便宜到可以 always-on。筛选本身花掉 10\% 的能耗就不合格:被它省下来的存储未必付得起这份能耗。
+  \item \textbf{在线自适应}——光照、场景、佩戴者行为都在变,不能依赖离线训练好的固定阈值。
+  \item \textbf{自标注}——重要性信号本身不能依赖人工标注或另一个昂贵模型。
+\end{enumerate}
+
+\subsection{现有路线为什么不够}
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{现有数据采集路线及其失效模式}
+  \label{tab:routes}
+  \begin{tabular}{p{3.6cm}p{3.4cm}p{6.6cm}}
+    \toprule
+    路线 & 思路 & 失效模式 \\
+    \midrule
+    全存/全传 & 先存下来,事后筛 & 存储/带宽随数据量线性增长;隐私不可接受 \\
+    运动触发(帧差/PIR) & 画面变了就录 & \textbf{自己}走路、转身、手持抖动都是``变''——不处理自运动必被淹没(实测:旋转场景下帧差法召回率归零) \\
+    专用传感器(事件相机) & 传感器本身只输出变化 & 要换硬件;成本、动态范围、供应链都不适合现装消费设备 \\
+    学习式重要性打分 & 训练一个小模型当裁判 & 裁判自己就需要常开的昂贵感知,且需要数据维护 \\
+    均匀/自适应抽帧 & 按预算抽 & 5\% 预算只能召回 17\% 的事件(实测) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+表~\ref{tab:routes} 的技术支点在第二行:\textbf{``画面变了''这个信号里,最大、最频繁、恰恰也最可预测的变化成分,是设备自己的运动引起的视流。} 任何不处理自运动的变化检测都会被自运动淹没——这正是帧差法在固定监控上能用、在移动设备上全线崩溃的原因。
+
+\subsection{本文的核心思路与组织}
+
+倒过来想。检测``什么重要''难(本质上要在设备上做语义理解);但预测``什么变化是自己造成的''容易——\textbf{因为设备天然带着自己的运动传感器(IMU)}。因此路线是:
+
+\begin{enumerate}
+  \item \textbf{副本}:读陀螺仪,知道相机此刻在怎么转;
+  \item \textbf{预测}:在深度特征图上维护逐格运行统计,学出``自己运动通常造成多大的变化'';
+  \item \textbf{残差}:把预测到的部分减掉,\textbf{残差大的片段才触发存储}——存的是``设备自己预测不了''的画面。
+\end{enumerate}
+
+这套结构借自神经科学——非洲弱电鱼用同构电路把自我干扰从猎物信号里减掉——但它的关键优势是工程性的:\textbf{IMU 是消费设备出厂自带的}。事件相机要用专用硅片才能做到的事,在这里是纯软件问题:零训练、零标注、约 0.2 ms/帧。
+
+本文余下部分按``从 0 到 1''组织:第 2 节讲生物学源头;第 3 节梳理思想谱系;第 4 节盘点工程中分散的同源结构;第 5 节给出原型系统的设计与成本账;第 6 节汇报实验证据(正面与负面);第 7 节总结可迁移的设计原则;第 8 节讨论边界与展望。
+
+\section{生物学源头:伴随放电与负像}
+
+\subsection{问题:自己干扰自己}
+
+感觉系统普遍面临一个问题:自己产生的动作会污染自己的感觉。非洲弱电鱼(\emph{Apteronotus leptorhynchus})是这一问题的极端实例:它用电器官放电(electric organ discharge, EOD)做主动感知,在周围水体中产生弱电场,通过电场畸变探测猎物。但它自己的 EOD 在感受器上比猎物信号强几个数量级——\textbf{自己淹没了要检测的目标}。
+
+鱼的解法不是更强的检测器,而是一个三元件电路\cite{bell1981,bastian1986}:
+
+\begin{enumerate}
+  \item \textbf{伴随放电(corollary discharge)}:运动指令(EOD 命令)的一份副本,经颗粒细胞(granule cell)通路展开为多时间尺度信号,送达电感觉外侧线叶(ELL);
+  \item \textbf{负像(negative image)}:ELL 中的 MG 细胞(功能上类似小脑浦肯野细胞)利用局部可塑性,学出自我干扰的精确预测——``如果我现在放电,感受器上会看到什么'';
+  \item \textbf{残差}:输出细胞(类似小脑深核)把负像减掉,只上报预测不掉的残差——猎物信号是被``减出来的'',不是``检出来的''。
+\end{enumerate}
+
+\subsection{连接组学证据:这不是隐喻,是电路}
+
+长期以来,这一功能框架主要来自电生理与行为实验的推断。Perks 等人 2026 年发表于 \emph{Nature} 的工作\cite{perks2026}给出了终极约束:用电子显微镜对整个微电路做连接组重建(29{,}694 个突触,覆盖 88 个输出细胞与 136 个 MG 细胞),直接检验真实突触连接是否满足功能所需的理论要求。三大发现:
+
+\begin{enumerate}
+  \item \textbf{感觉输入经抑制/去抑制通路进入可塑性细胞。}直觉上电感受器纤维应直接兴奋 MG 细胞,但连接组显示主通路是两级中间神经元:ON/MG$+$ 走``两级抑制''(符号保持),OFF/MG$-$ 走``一级抑制''(符号反转)——可塑性的教导信号需要特定的生物物理形式,真实连接与设计要求严丝合缝。
+  \item \textbf{MG$\to$输出细胞的连接精确解决了信用分配(credit assignment)。}MG$-$ 只连 ON 和 MG$+$,MG$+$ 只连 OFF 和 MG$+$——3{,}527 个 MG$\to$输出突触中只有 1 个违反模式;MG 之间的递归连接同样精确(1{,}322 个突触中 10 个违反)。负像在 MG 细胞里学成,再传给输出细胞。
+  \item \textbf{双可塑性位点 + 递归连接 = 快、准、抗噪。}受连接组约束的计算模型复现了在体记录;逐项消融显示,单靠输出细胞自身可塑性时 OFF 细胞学得非常慢(增强比抑制慢约 8 倍),MG 传入把快学出来的半边负像``借''给慢的那半边;加入 MG 递归后两边都快。最关键的单元测试是\textbf{噪声稳健性}:持续注入零均值外源噪声后,取消精度几乎不受影响——而这个稳健性强烈依赖双可塑性位点\textbf{同时}存在,拆掉任何一个就崩塌。
+\end{enumerate}
+
+这组发现对工程的意义在于:``预测--取消''不是一个可选的生物学细节,而是感觉系统在能量约束下的通用解法。大脑在每一处``自己干扰自己''的感觉模态上都独立演化出了同构架构:电鱼的电感觉、哺乳动物的眼动抑制、蝙蝠回声定位中的发声抑制、人的发声听觉抑制。当设备遇到同构的问题(自运动干扰视觉)时,照搬这个架构是低风险选择——前提是逐条验证``照搬的这一条在工程上是否还成立'',这正是第 6 节全部实验的内容。
+
+\section{思想谱系:感知 = 预测 + 残差}
+
+残差触发数据采集的想法有一条清晰的跨学科谱系(图式的文字版):
+
+\begin{itemize}
+  \item \textbf{Helmholtz(1867)}:知觉是``无意识推理''——感觉信号本身不足,大脑必须结合先验做出推断。
+  \item \textbf{von Holst \& Mittelstaedt(1950)}\cite{vonholst1950}:区分``再传入(reafference)''(自己动作造成的感觉)与``外传入(exafference)''(环境造成的感觉),并提出神经系统持有动作指令的\textbf{副本}用于区分两者——伴随放电概念的源头。这一原理解释了为什么眼球快速转动时世界看起来不动(眼动抑制)。
+  \item \textbf{Marr--Albus--Ito 小脑学习理论(1970 年代)}\cite{marr1969,albus1971,ito1982}:小脑是监督学习机器,爬行纤维携带误差信号修正平行纤维--浦肯野细胞突触——``局部可塑性实现误差驱动学习''的第一次理论化。
+  \item \textbf{Kawato / Wolpert(1980--90 年代)}\cite{kawato1992,wolpert2000}:小脑承载\textbf{内部前向模型}——给定当前状态与运动指令,预测感觉结果;运动控制、感觉衰减(为什么自己挠自己不痒)、眼动抑制都可用前向模型统一解释。
+  \item \textbf{Rao \& Ballard(1999)}\cite{raoballard1999}:预测编码(predictive coding)——视觉皮层的残余兴奋模式与``自上而下预测 + 自下而上误差''的分层推断一致。
+  \item \textbf{Bell \& Bastian(1990 年代--2000 年代)}\cite{bell1981,bastian1986}:电鱼 ELL 的负像为上述思想提供了最干净的可电生理验证实例。
+  \item \textbf{Perks 等人(2026)}\cite{perks2026}:连接组给出终极约束——这套计算是真实突触连接实现的电路,不是理论家的隐喻。
+\end{itemize}
+
+这个谱系带来一个架构判断:\textbf{``预测--取消''是感觉系统的通用设计模式。}预测是自回归的——你知道自己刚才做了什么;检测是开放集的——你不知道世界里会出现什么。在拥有副本的前提下,预测自干扰比检测外源目标容易几个数量级,因此进化(以及好的工程设计)应该把预算全花在容易的那半边,难的那半边直接不做或延后。
+
+\section{工程中的同源结构}
+
+有趣的是,``预测--取消''在计算机科学里并不新鲜,只是分散在各个领域,很少被当作通用原则:
+
+\begin{itemize}
+  \item \textbf{视频编码}:H.264/AVC 的 P 帧不传完整画面,只传运动补偿后的残差\cite{h264}。编码器侧``预测容易''(块匹配搜索已知参考帧),于是传输预算全花在预测不了的部分。残差触发存储是把同一结构从``压缩一段视频''搬到``筛选一个无限长的数据流'':预测器换成 IMU 副本(更便宜、无纹理依赖),残差用途从``重建''换成``决定存不存''。
+  \item \textbf{背景建模}:背景减除\cite{piccardi2004,bouwmans2014}本质上是``学出场景的负像,只上报前景残差''。它的失效模式与残差触发完全同构——摄像机一转动,背景模型就被自运动打穿。二十年的改进史(如 PTZ 相机的转角回读)本质上是在补``副本'',从侧面验证:没有副本的负像学习在移动平台上走不远。
+  \item \textbf{声学回声消除(AEC)}\cite{benesty2001}:电话会议中音箱会串进麦克风。朴素解法``从录音里听出回声并减掉''是开放集问题,极难;实际部署的系统直接把\textbf{扬声器的播放信号作为参考副本},用自适应滤波器预测它经过房间后在麦克风里的形态,然后减掉。
+  \item \textbf{主动降噪耳机}:用音乐信号本身做参考来预测残留噪声,而不是重新``听''一遍。
+  \item \textbf{基于模型的异常检测}:``建基线 + 看离群''的残差检验是工业界异常检测的主流范式。残差触发分数就是一个 $z$ 分数化的残差——不是学出来的重要性模型。
+  \item \textbf{事件相机(event camera)}:在传感器硅片层面只输出亮度变化\cite{gallego2020}。它与残差触发殊途同归(都回答``只传输变化''),但要换专用硬件,且丢掉残差之外的 RGB 上下文——而上下文对下游训练有价值(第 6.1 节中,残差触发片段在事件召回上甚至打赢了全预算 oracle,原因之一就是它保留上下文)。
+\end{itemize}
+
+\subsection{副本已在栈中——而且只有一个平台开放它}
+\label{sec:stack}
+
+伴随放电不是异国情调的硬件。每一套严肃的相机管线都已经在消费陀螺仪:云台\textbf{闭环在用}(反馈控制),电子防抖\textbf{后处理在用}(帧间对齐 warp),滚动快门校正\textbf{建模在用}(行曝光时间 $\times$ 角速度)。本项目加上第四种用法:\textbf{预测在用}——用同一个信号提前知道下一帧该长什么样,因而知道哪部分不值得存。四种用法共享同一个前提:画面变化的原因是已知量,而不是待估计的未知。
+
+这也是``普通视频和加了陀螺仪的数据有什么不同''的准确回答:普通视频只见果不见因,自运动必须从画面本身反推——这是个逆问题,欠定、依赖纹理、稠密光流要 3.8 ms/帧;有了陀螺仪,因是实测输入,预测变成良态的正问题——一个 $O(\text{像素数})$ 的平移,0.03 ms。自运动从待抑制的噪声变成可直接减掉的已知量,剩下的残差报告的才是世界而不是设备。
+
+平台可及性接着决定这层结构能住在哪。运动相机厂商(GoPro、影石、大疆)把陀螺仪原始数据流当作核心 IP——防抖本身就是他们的产品(HyperSmooth、FlowState、三轴增稳)——只在 SDK 协议与保密协议下开放。而在手机上,陀螺仪由操作系统标准传感器 API(Android SensorManager、iOS CoreMotion)以 100+ Hz、硬件时间戳提供,无需厂商授权、无需用户权限弹窗,一个通用记录 app 即可导出。手机是唯一一个传感器数据面开放、相机模组又足够好的大众平台。关键这不是妥协:这层结构要服务的采集场景本身就以手机 footage 为主(Open-AoE\cite{openaoe} 全部用手机采集),于是\textbf{副本能拿到的平台,与数据产生的平台,是同一个}。协议层的天然宿主因此就是手机——或者``伴侣摄像头 + 手机 IMU''的组合——这也让真机 IMU 验证通路从``验证步骤''升级为唯一尚未端到端打通的产品级数据通路。
+
+这些例子共同指向一条原则:\textbf{先问``这个信号里哪一部分是我能廉价预测的'',把这部分从问题里删掉,再把全部预算花在剩下的残差上。}但有一个前提决定取舍是否成立——预测器必须廉价到可以常开。一个需要 GPU 的预测器,省下的存储可能付不起它自己的电。
+
+\section{系统设计:从生物映射到采集协议层}
+
+本节描述一个把上述思想落地的最小原型\footnote{全部代码、数据与结果文件均为开源,每个表格数字都有一条可独立执行的复现命令;本文只引述已实测的数字。}。系统的定位不是又一个视觉识别模型,而是\textbf{视觉模型协议栈里可插拔的数据采集层}——``模型不存它能预测的东西''。
+
+\subsection{概念映射}
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{从电鱼 ELL 到相机 rig 的概念映射}
+  \label{tab:mapping}
+  \begin{tabular}{p{4.4cm}p{8.6cm}}
+    \toprule
+    电鱼 ELL(生物) & 相机 rig(工程) \\
+    \midrule
+    电器官放电 EOD(自己最强的输入) & 自运动引起的视流(画面里最大最频繁的变化) \\
+    EOD 指令的伴随放电 & IMU 陀螺流(设备天然携带,零额外成本) \\
+    颗粒细胞时间基 & 陀螺信号的非线性多项式展开($[1, |g_x|, |g_y|, |g_z|, g_x g_y, g_x^2, \dots]$) \\
+    负像(可预测反应) & 特征图上逐格运行均值/方差(winsorized 变体) \\
+    联合性抑制/易化 & 局部反 Hebb 更新,无反向传播 \\
+    快/慢可塑性配对 & 快权重(秒级) + 慢权重(长时),快权重被拉向慢权重 \\
+    平衡放电率可塑性门 & ``当下正在惊讶的 cell 不学习''(经实测有 regime 边界,见第 6.2 节) \\
+    输出细胞残差 & 逐格 $z$ 分数化残差;内部格取最大值 = surprise \\
+    猎物检测 & 触发式片段保存(带迟滞、自校准) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+表~\ref{tab:mapping} 是整个方向成立的支点:\textbf{电鱼为了一份运动指令副本进化了一整套神经结构,手机出厂就有陀螺仪。} 专用传感器路线(事件相机)的问题被转化为纯软件问题。
+
+\subsection{算法管线}
+
+管线工作在冻结卷积骨干(如 MobileNetV3\cite{mobilenetv3} \texttt{features[:3]},输出 $24{\times}28{\times}28$ 特征图,stride 8)的特征空间上:
+
+\begin{enumerate}
+  \item \textbf{副本与几何预测}:陀螺仪角速度按标定焦距换算成特征图像素位移
+  \begin{equation}
+    d_t = f_{\mathrm{map}} \cdot \tan\!\big(\mathrm{radians}(g_t) / \mathrm{fps}\big),
+  \end{equation}
+  用 $d_t$ 对上一帧特征图做平移 warp,得到预测 $\hat F_t(x) = F_{t-1}(x - d_t)$。这一步是一个 $O(\text{像素数})$ 的内存搬运,无设备依赖。
+  \item \textbf{残差与标准化}:$r_t = F_t - \hat F_t$,用逐格运行统计量做 $z$ 分数化。
+  \item \textbf{局部在线可塑性}:统计量逐帧 EMA 更新(快时间尺度),慢时间尺度牵引快尺度;全程局部、因果、无时钟、无标注。稳健版本(winsorized always-update)把离群值以 $3\sigma$ 截断后进入 EMA——既撑不大尺度,也不会把更新门冻住。
+  \item \textbf{读出与触发}:无训练的读出(最强内部格的 $z$,或 $z^2$ 能量)进入自校准触发器:分数先除以其自身平静帧运行统计量,再进入无量纲的 $6/2.5$ 迟滞门控,无需手调阈值。触发后保存整段 clip(带前导/后随缓冲)。
+\end{enumerate}
+
+整条管线的全部算子都是``平移 + EMA'',理论上可下沉到 ISP/NPU 旁路。
+
+\subsection{成本账}
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{每帧延迟实测(320$\times$240 帧,$24{\times}28{\times}28$ 特征图,本机 MPS;10 次重测协议)}
+  \label{tab:cost}
+  \begin{tabular}{lr}
+    \toprule
+    阶段 & ms/帧 \\
+    \midrule
+    gyro shift(纯旋转 warp) & 0.032 \\
+    像素管线核心(warp + 网格 + 可塑性 + 触发) & 0.171 \\
+    冻结骨干前向(MobileNetV3 \texttt{features[:3]}) & 0.83 (MPS) / 1.76 (CPU) \\
+    DIS 稠密光流(320$\times$240)\cite{dis2016} & 3.81--4.34 \\
+    完整 flow-cancel 步 & 4.46--5.7 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+表~\ref{tab:cost} 有三个读法。第一,\textbf{副本的代价是 30 微秒}——一个矩阵平移;整个像素管线占 30 fps 帧预算的 0.5\%。第二,光流确实买到残差质量(平静帧残差 naive 0.093 $\to$ gyro 0.079 $\to$ flow 0.070):花约 100 倍的成本买约 15\% 的残差质量,在筛选层这个 use case 里不划算;但光流作为质量上限与按需仲裁者是另一回事(见第 5.4 节)。第三,可移植性有实测边界:CPU 与 MPS 下特征最大相对差 $2{\times}10^{-6}$,下游残差差 $3.7{\times}10^{-9}$,CPU 仅慢 1.7 倍。
+
+\textbf{光流上限的稳健性}也验证过:把 RAFT\cite{raft2020}(raft-things 权重)接入同一 warp 路径,合成验证集上 RAFT 0.1054 $\approx$ DIS 0.1056,真实高运动上 RAFT 0.0544 vs DIS 0.0522,而 RAFT 慢约 20 倍(134--138 ms/帧)。``光流是上限''不是 DIS 太弱造成的假象,gyro 与 flow 的差距换估计器弥合不了。
+
+\subsection{分辨率:决定 gyro warp 值不值的旋钮}
+
+gyro warp 只能移除特征图``看得见''的运动。同样的旋转产生的内容位移是 $f_{\mathrm{map}} \cdot \tan(\omega / \mathrm{fps})$ 个特征图像素,而 $f_{\mathrm{map}}$ 随输入尺寸线性缩放。用三个输入尺寸重跑同一基准(合成 rig,40 训练 + 25 验证序列):
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{分辨率扫描:gyro warp 的收益(合成验证集,3$\times$运动)}
+  \label{tab:resolution}
+  \begin{tabular}{lccccc}
+    \toprule
+    输入尺寸 & 特征图 & \multicolumn{2}{c}{平静帧残差} & gyro 收益 & gyro shift \\
+    \cmidrule(lr){3-4}
+    (px) & 尺寸 & naive & gyro & vs naive & ms/帧 \\
+    \midrule
+    224 & 28$\times$28 & 0.221 & 0.130 & $-41\%$ & 0.032 \\
+    336 & 42$\times$42 & 0.187 & 0.089 & $-52\%$ & 0.061 \\
+    448 & 56$\times$56 & 0.169 & 0.072 & $-58\%$ & 0.087 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+收益单调且未饱和:每提高 1.5 倍输入尺寸,就多消掉 6--10 个百分点的 naive 预测器消不掉的平静残差。这把``伴随放电取消''刻画为一个\textbf{被分辨率门控的原语}——配套细粒度特征图时,它用约 0.09 ms/帧消掉一半可预测残差;在粗特征图上它免费但中性。注意(第 6.3 节将详述)这条设计规则只在合成数据上成立,不能迁移到真实高运动数据——分辨率修的是估计器误差,修不了模型类误差。
+
+\section{实验证据:正面结果与负结果}
+
+按``先 justify 架构,再堆性能''的顺序汇报。本节刻意同等对待正面结果与负结果:六个性质不同的实测负结果共同划清了该方法的适用域,其信息量比正面结果更大。
+
+\subsection{合成 regime:headline 结果}
+
+\textbf{问题}:只存储残差触发片段的设备,训练出的下游模型是否\textbf{每存储字节更好}?
+
+\textbf{协议}:合成 rig(纹理场景 + 平滑自旋转 + IMU;训练 1$\times$运动幅度,验证 3$\times$,含 regime shift;事件为物体出现/移动)。训练帧由各方法在 40 条训练序列上按匹配存储预算采样;下游为冻结 MobileNetV3 特征上的 Logistic 头;评估在完整 25 条验证序列上进行。
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{下游训练对比(合成 rig;val AP 与 top-10\% 预算事件召回 evRec@10)}
+  \label{tab:headline}
+  \begin{tabular}{lcccc}
+    \toprule
+    方法 & 存储占比 & 训练帧数 & val AP & evRec@10 \\
+    \midrule
+    \textbf{cerebellum(自适应触发)} & \textbf{3.4\%} & 826 & \textbf{0.298} & \textbf{0.96} \\
+    uniform 0.5$\times$ 预算 & 7.9\% & 1891 & 0.126 & 0.50 \\
+    uniform 1$\times$ 预算 & 15.0\% & 3596 & 0.127 & 0.62 \\
+    uniform 2$\times$ 预算 & 30.1\% & 7223 & 0.113 & 0.58 \\
+    uniform 4$\times$ 预算 & 51.0\% & 12238 & 0.145 & 0.69 \\
+    oracle(预算全花在事件帧) & 1.9\% & 449 & 0.191 & 0.72 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+表~\ref{tab:headline} 的四个结论,由弱到强:
+
+\begin{enumerate}
+  \item \textbf{残差触发片段在 4 倍字节预算下仍胜均匀采样}:3.4\% 存储时 AP 0.298,uniform 需要 3.5 倍帧数仍大幅落败。
+  \item \textbf{赢在数据,不在预算}:加大 uniform 预算无法缩小差距(超过 0.5$\times$ 后反而更差——背景更稀释),优势来自事件富集。
+  \item \textbf{甚至胜过 oracle}:触发片段保留了事件 onset、消失与运动边界上下文——正是判别式头需要的帧——而 oracle 只保留事件中段帧。
+  \item \textbf{自校准胜过手调阈值}:自适应触发器比手调工作点少存 4.3 倍帧,且训练出更好的头——用轨迹自身平静统计量归一化是比任何固定阈值更锐的判据。
+\end{enumerate}
+
+\textbf{记录在案的负结果}:把下游 Logistic 头换成 128 隐层 MLP 是 AP 负收益(0.298 $\to$ 0.200)——验证 regime 惩罚容量,模型在这个基准上不是瓶颈,\textbf{数据才是}。同理,屏幕录制是此方法的死路(实测):ProMotion 合成器帧混合与 HEVC B 帧平滑破坏了帧间锐利的时间采样,即使 oracle 补偿器也留下 130 倍于原始帧的残差地板。
+
+\subsection{真实第一人称视频(Open-AoE):三个合成 rig 给不出的发现}
+
+第一次真实世界检验使用 Open-AoE\cite{openaoe}(约 700 小时消费级手机第一视角视频,带视觉 SLAM 相机轨迹与原子动作标注)。gyro 信号由 \texttt{cam\_c2w} 轨迹差分得到(逐轴符号对照 DIS 流自标定)。在 9 个跨场景 segment(浴室/卧室/儿童房/餐厅/厨房/客厅/工坊/工作台/商店)上,三条发现全部成立:
+
+\begin{enumerate}
+  \item \textbf{真实桌面级自运动在 28$\times$28 特征图上是亚像素的}(内容位移中位数 0.013 特征图像素)——gyro warp 物理上中性(naive 0.0323 vs gyro 0.0328)。伴随放电的价值要看 regime。
+  \item \textbf{平衡门在真实数据上会冻结。}96.4\% 的帧 surprise 超过阈值被挡在统计更新之外,warmup 后尺度单向衰减,z 分数全场饱和:固定阈值读数``全是热点'',自适应触发``一个 clip 都不发'',两个读数朝相反方向退化。平衡门假设``surprise 稀疏''对合成 pop-in 事件成立,对真实视频不成立。修法(winsorized always-update)仍是纯局部规则;修复后触发恢复:\textbf{stored 9.9\%、事件召回 0.79}(此前为 0 clip)。旁证:光流基线共用同一套门控统计,同样 0 clip——失效的是门,不是预测器。
+  \item \textbf{残差尖峰真实但与动作标注反相关}(AUC 0.47):残差最高帧是快速手/物体运动 + 运动模糊,而原子动作是长区间标注。帧级 event-recall 对照人类动作标注在真实数据上是错误指标;对存储选择架构,有意义的指标是被选片段的下游价值。
+\end{enumerate}
+
+高运动端(gyro p95 $|yaw|$ 31--52$^\circ$/s 的 2 段)终于离开亚像素 regime:gyro warp 比 naive \emph{更差}(0.090 vs 0.080;二维平移模型不补偿 roll,且符号标定更弱),DIS 光流在质量上明确胜出(0.052),成本上则以约 250 倍落败(8.4 ms vs 0.033 ms/帧)。仲裁级联(gyro 常开 + DIS 只在候选帧按需调用)在这个 regime 正是桥:在最活跃的片段上否决 11\% 的候选 run,stored 0.92 $\to$ 0.62,摊销 0.58 ms/帧。
+
+\subsection{负结果与适用边界:六个实验钉清的边界}
+
+\label{sec:negatives}
+
+\begin{enumerate}
+  \item \textbf{合成优势不迁移到真实数据的稠密语义任务。}真实任务改为帧级动词分类(12 段,9 类动词,3-fold 跨段 CV $\times$ 35 seed = 105 轮/方法):cerebellum(16\% 存储)mAP $0.162{\pm}0.077$,uniform 1$\times$(同预算)$0.173{\pm}0.082$,oracle(13\% 存储)$0.164{\pm}0.088$——全部在 1$\sigma$ 内重合。触发器工作正常(stored 16\%、召回 0.67),但它选的是\textbf{运动学上不可预测}的帧,不是\textbf{语义上重要}的帧。
+  \item \textbf{主场 regime 也没赢。}在触发器本该最赢的稀疏物理事件 regime(10 段含 drop/throw/toss/break,事件帧占 3.3--26.3\%,含高运动段;LOO $\times$ 25 seed = 250 轮/方法),cerebellum(23.4\% 存储)与 uniform 1$\times$(23.6\%)依旧打平(AP $0.108{\pm}0.094$ vs $0.104{\pm}0.084$);oracle(7.9\% 存储)仍最优但优势收窄。存储--价值不对称存在(oracle 证明了),但运动不可预测性没能把它提取出来。
+  \item \textbf{``自运动没分离干净''这条逃生路线被追测证伪。}事件段的轨迹自带真值平移,可直接测``纯旋转 vs 旋转 + 真值平移''warp:残差在事件区间内 vs 外几乎一样(0.197 vs 0.193),surprise 也是(10.8 vs 11.3)。残差幅度对``事件是否发生''基本不敏感;噪声主体是手部/物体这类\textbf{世界运动},任何相机运动模型——标定的或学习的——都消不掉。
+  \item \textbf{残差图本身不携带事件信息。}对 $z$ 图做读出端升级(全局幅度 $z^2$、空间金字塔 $1{+}4{+}16$ 维、与骨干特征拼接),1 维幅度读出在三种存储方法下 AP \textbf{逐位相同}($0.129{\pm}0.098$)——这是零信号坍缩:逻辑回归在零信号特征上学到零权重。残差图的幅度与空间模式都不携带事件判别信息。
+  \item \textbf{``运动越大副本越值钱''被证伪。}行走级 4 段(gyro p95 71--75$^\circ$/s):gyro warp 在 3/4 段比不补偿更差(mean calm residual $+11\%$)——模型类误差(平移、视差、滚动快门)随运动增大,且 SLAM 差分出的副本本身在高运动下退化。合并桌面(中性)、高运动($-12\%$)、行走级($+11\%$):\textbf{gyro warp 在真实数据的任何已测运动尺度上都没赢过 naive。}由这条最初得出的结论是``残差质量优势是合成 regime 独有的性质''。\textbf{下面两项追测部分收回了这个解读}:(a) 轴消融(见~\ref{sec:axiabl})表明行走级失效的主因是漏掉了 roll——一个旧预测器根本表达不了、补上只需 0.04 ms/帧的分量;(b) 真机陀螺仪实验(见~\ref{sec:realimu})表明把 SLAM 替身换成硬件 gyro 后,同一个三维单应在真实手持视频上确有收益。本条\textbf{仍然成立}的部分是:\emph{已发布}的那套二维平移预测器在真实数据上失效——那是对一个二维平移模型的陈述,不是对架构或对 regime 的陈述。原文保留在此,以便读者看到修正是如何发生的,而不是被静默覆盖。
+  \item \textbf{检测级信号在浅层冻结特征下不存在,且换更强的骨干也无解。}检测级 rig(CenterNet 风格热点头 + 精确 bbox 真值,20 seed)所有存储方法 detAP $\le 0.015$ 且 1$\sigma$ 重合;评测有回归测试守住(完美预测热点图 AP = 1.0),根因是冻结瓶颈——\texttt{features[:3]} 对平坦 blob 几乎无响应。替换为自监督 ViT patch token\cite{dino2021,dinov2} 全面落败:DINOv2 ViT-S/14 触发 0/40 段(协议内不可修),DINOv2 ViT-S/8 官方权重已下架,DINOv1 ViT-S/8 事件区分度恢复但触发率仅 3/40 段 vs MobileNetV3 的 11/40。residual-trigger 操作点上,自监督 ViT patch token 全面不如 2019 年的 MobileNetV3 早期层。
+\end{enumerate}
+
+\subsubsection{追测一:按旋转轴分解行走级失效}
+\label{sec:axiabl}
+
+上文第 5 条负结果把行走级失效归因于``模型类误差(平移、视差、滚动快门)''。那是一个没有消融支撑的诊断。下面的实验把它分解开,而答案是可行动的,不是致命的。
+
+\textbf{协议。}已发布预测器是一个只由 yaw 与 pitch 驱动的纯二维平移。我们把它与``三轴 gyro 的各个子集''构成的旋转模型比较,每个都实现为平面在无穷远的单应 $H = K R K^{-1}$(roll 是绕光轴的旋转,没有二维平移近似)。逐轴符号在每段前 25\% 上按八个符号组合坐标下降拟合,然后\emph{冻结},在后半段评估——标定与评估窗口不相交。七段 gyro p95 $\ge 60^\circ$/s(行走级)与五段 p95 $<60^\circ$/s 进入比较;拟合出的符号向量在全部七段高运动段上完全一致($[+,-,+]$),说明标定不是在拟合噪声。
+
+\textbf{两条协议审计注记}(均为事后确立,且与下表结论一致)。第一,七段行走级里有一对\emph{重复}:特征图缓存 \texttt{aoe\_event/seq\_007} 与 \texttt{aoe\_motion/seq\_001} 逐字节相同(特征图与 IMU 流的 MD5 都相同),所以行走级实际上是六段独立录制。去重只改变次小数位、不改变任何模型的次序,故结论不受影响;本文后续分析均自动去重。第二,残差幅度的增益原则上可能依赖于\emph{在哪里}与\emph{怎样}测量,因此我们把完整的七模型消融在``评估窗口$\times$度量口径''的 $2\times2$ 网格下重跑。
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{轴消融在``评估窗口 $\times$ 度量口径''$2\times2$ 网格下的稳定性审计(去重后 11 段)。``行走级''取 gyro p95 $\ge 60^\circ$/s(去重后 $n{=}6$),``桌面/中运动''为其余($n{=}5$)。增益是相对 naive 的平均 $|$残差$|$ 降幅百分比。\emph{本表所依据的那句主张——行走级下 roll 单轴比 yaw$+$pitch 合起来恢复得更多——在两个度量口径与两个窗口下都成立};而桌面级下次序相反,这正是本表要测的运动档位依赖。}
+  \label{tab:axis-stability}
+  \begin{tabular}{llcccc}
+    \toprule
+    运动档位 & 度量口径 & roll 单轴 & yaw$+$pitch & 三轴全开 & 二维平移 \\
+     & & & (单应) & (单应) & (已发布) \\
+    \midrule
+    行走级($n{=}6$) & 内区 & $\mathbf{+3.90\%}$ & $+2.96\%$ & $\mathbf{+5.53\%}$ & $-7.82\%$ \\
+    行走级($n{=}6$) & 全帧 & $\mathbf{+3.54\%}$ & $+0.41\%$ & $+3.22\%$ & $-8.71\%$ \\
+    \midrule
+    桌面/中($n{=}5$) & 内区 & $+1.28\%$ & $\mathbf{+3.16\%}$ & $+3.41\%$ & $-1.17\%$ \\
+    桌面/中($n{=}5$) & 全帧 & $+1.24\%$ & $\mathbf{+2.36\%}$ & $+2.60\%$ & $-1.40\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+由表~\ref{tab:axis-stability} 可得三点。其一,行走级下``roll 优于 yaw$+$pitch''这个次序是\textbf{口径无关}的(排除边界与包含边界都成立),也是窗口无关的——所以它是数据的属性,而不是测量的属性。其二,\emph{合并}后的次序则不是:把所有运动档位合并、排除边界时 yaw$+$pitch 高于 roll,而包含边界时次序反过来。这个表面矛盾由运动档位切分解决——roll 的优势是高运动效应;桌面级下两个口径都是 yaw$+$pitch 胜,因为在亚像素位移下 roll 的线性位移场落在噪声地板以下,而 yaw/pitch 仍有更大的力臂。其三,三轴单应是\emph{唯一}在四种组合下都为正的模型,这才是可操作的结论:它应当作为默认,而不是逐 regime 选择。我们报告这项审计而不是只报告那个招牌数字,因为本分析的第一版(单一窗口、单一口径)会支持一个比数据所允许的更强的陈述。
+
+\subsubsection{追测二:真机陀螺仪,以及``副本质量''这条逃生路线遮蔽了什么}
+\label{sec:realimu}
+
+上文所有真实数据结果都建立在一个伴随放电的\emph{替身}上:gyro 信号由视觉 SLAM 相机轨迹差分得到,于是它恰好在自运动补偿最重要的地方(低纹理、快运动、滚动快门)继承了 SLAM 的失效模式。这始终是那六条负结果头上的保留意见:也许坏的是副本,不是模型。下面的实验用一个\textbf{真手机陀螺仪}替换替身,从而消除这条保留。
+
+\textbf{装置。}一段手持 Galaxy S21 录制(来自带硬件 IMU 流的公开手机视频数据集,1088$^2$ 帧、约 28 fps、纳秒时间戳,500 帧 $=$ 17.9 s,帧间隔抖动 74\%)。IMU 对 DIS 光流标定:轴到方向的指派与逐轴符号由逐帧相关确定,焦距由过原点最小二乘斜率在水平轴上拟合。拟合单位是 rad/s,视场角 36$^\circ$;副本质量按与替身相同的方式测量——预测内容位移 vs 由像素测得的位移——得到 \textbf{$r = +0.958$、$R^2 = 0.87$},而 SLAM 替身是 0.18--0.93。这是一个\emph{干净}的副本。
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{真机 gyro 残差对照(手持手机段,$n{=}400$ 帧)。主口径是方法无关的全帧原始残差。第二列残差用\textbf{由原始图像帧差}定义的平静帧掩码——与所有被比较的预测器无关——以避免最初发表的``平静帧''口径的循环选择(每个方法按自己的 surprise 选帧,仅在 JSON 里以 \texttt{published\_calm} 保留以维持连续性)。管线原有预测器是 yaw$+$pitch 平移;旋转模型是~\ref{sec:axiabl} 的三轴单应。DIS 光流是质量上限参照。四行共用同一前端、同一分段、同一度量和集。}
+  \label{tab:realimu}
+  \begin{tabular}{lcccc}
+    \toprule
+    预测器 & 全帧残差 & 相对 naive & 帧差平静帧残差 & 成本(ms/帧) \\
+    \midrule
+    naive(不补偿) & 0.394 & 1.000 & 0.295 & 0.056 \\
+    gyro$+$yaw/pitch 平移(\textbf{已发布}) & 0.538 & $\mathbf{1.36\times}$ & 0.440 & 0.088 \\
+    gyro$+$三轴单应 & $\mathbf{0.330}$ & $\mathbf{0.84\times}$ & 0.284 & 0.148 \\
+    DIS 光流 & 0.241 & $0.61\times$ & 0.207 & 4.30 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{结论反转了,而且反转可归因于模型。}在干净副本与同一特征前端下,已发布的二维平移预测器让残差\emph{更差}($1.36\times$),而三轴单应让它\emph{更好}($0.84\times$)——仅换预测器就带来约相当于 naive 残差 60\% 的摆动,代价是 0.148 ms/帧对光流的 4.30 ms。在旋转最强的 100 对帧上做逐像素对照更极端:常数平移近似 $1.43\times$,完整旋转 $0.61\times$。两条模型缺陷解释了差距,且各自可独立核验:(i) 已发布预测器里\textbf{完全没有 roll}(此处 roll p95 为 45$^\circ$/s,在特征图角落相当于约 1 格的切向位移);(ii) 旋转场的常数-$(dx,dy)$ 近似只在画面中心附近有效——yaw/pitch 诱导线性与二次的位移场,其近似误差随离中心距离增长,实测该误差超过了补偿收益。
+
+这是本项目第一个``真实数据 + 真实副本带来正残差质量结果''的数据点,它重新归因了那条长期负结果:至少有一部分是预测器的问题,而不是数据的问题,也不是副本的问题。
+
+关于这个结果推翻什么、不推翻什么,需要精确:它说明残差质量优势\emph{并非}在``真实footage上不可得''这个意义上属于合成专属——手持视频上的干净副本确实买到残差抵消。它\textbf{不}重新打开上文第 5 条,因为那条所依赖的评测(行走级 Open-AoE、触发行为与下游片段选择)尚未在三轴单应下重跑。改变的是解释,而且方向对架构有利:已发布模型把一份可测、可廉价回收的收益留在了桌上。
+
+\textbf{一条我们未能解决的可复现性注记。}本实验的绝对残差无法用当前代码复现:重跑得到 naive $0.3945$(以及 $1.36\times$ / $0.84\times$),而最初一次是 $0.3704$(以及 $1.308\times$ / $0.876\times$)。naive 不依赖任何被改动的代码——它既不涉及焦距也不涉及任何 warp——所以分歧在帧读取链里。我们排除了帧内容(MD5 逐字节相同)、输入缩放(224/256/192/160)、灰度转换、CPU 与 MPS、帧数(350--500)以及焦距版本(42.674 与 43.13),\textbf{但没有定位到原因}。\emph{稳定}的是量级与方向:方法次序、符号、相对比值在两套读数下一致(平移约 $1.3$--$1.4\times$、单应约 $0.84$--$0.88\times$、光流约 $0.61$--$0.66\times$)。因此我们引用比值而不引用绝对残差,并把表~\ref{tab:realimu} 的绝对值标记为一次未复现的快照。两套读数支持同一结论,这也是我们仍然报告该结果的原因——但读者应把绝对残差第三位小数视为不稳定。
+
+\textbf{构建过程中发现的三个约定 bug},每一个都曾让一个已测结论反转。它们值得记录,因为三者在静默程度上相同:都不报错,都给出看起来合理的数字,只是数字是错的。
+
+\begin{enumerate}
+  \item \textbf{warp 方向装反了。}\texttt{cv2.warpPerspective} 默认实现 $dst(x) = src(H^{-1}x)$,所以不传 \texttt{WARP\_INVERSE\_MAP} 就把预测朝\emph{相反}方向 warp:几个百分点的收益变成几个百分点的损失。这在残差数字里看不出来——残差只是``变差了一点''——它连续误导了两轮排查,直到用点源测试(跟踪 delta 函数在两种 flag 下各自移动到哪里)才暴露。我们现在保留的检查:旋转 warp 与已标定的平移模型必须把同一个点移到同一处。
+  \item \textbf{轴符号与插值 flag 是\emph{联合}约定。}把三个符号全部取反,与去掉 \texttt{WARP\_INVERSE\_MAP} 在数值上等价:$(-s, \text{带 flag})$ 与 $(+s, \text{不带})$ 给出完全相同的残差(实测两种都是 $0.9655$)。因此补上缺失的 flag\emph{必须}同步反转所有已存符号约定;只做一件会得到 $1.29\times$ 而正确的是 $0.84\times$。脱离 flag 状态的符号表没有意义,所以两者现在一起记录并由测试锁死。
+  \item \textbf{gyro 时间配对逐数据集不同,而我们从单个数据集做了推广。}预测 $F_t$ 需要描述 $(F_{t-1} \to F_t)$ 这一步的角速度。存储读数描述的是这一步还是下一步,是各数据集预处理的性质,而本项目两个数据集恰好相反:真机 IMU 段(按当前帧标定)与\emph{上一帧}读数配对时从 $0.906$ 改善到 $0.835$;而 Open-AoE(轨迹差分直接存的就是 $(t{-}1 \to t)$ 转角)则一致地更适合当帧读数。把手机上的结论推广到两个数据集会压低一部分 Open-AoE 收益。教训比``用上一帧''更窄、也比``调参''更宽:任何``读数与位移步''之间的配对都必须按数据源声明,并在留出数据上验证。
+\end{enumerate}
+
+三条 bug 与上文第 5 条负结果有一条共同线索:每一次失效都是\emph{副本到图像的映射被静默地错误指定},而不是架构的极限;而每一次的线索都是某个实验与独立推导出的预期不一致。我们把它记为方法论要点,因为正是同一类错误让``SLAM 替身''这条保留意见长期难以清除。
+
+\textbf{收敛后的项目主张}只剩三个已成立的部分:(1) 合成 regime 的下游价值(表~\ref{tab:headline});(2) 跨 regime 成立的成本与工程优势——IMU 副本的获取成本比光流低约 2 个数量级(0.033 ms vs 8.5 ms/帧)是实测事实,稳健触发在 22 段跨场景(桌面到行走级)工作正常;(3) 边界知识,其中承重的部分是否定性的且不变:``动能不可预测 $\ne$ 语义重要性''。与之并列的``残差质量优势是合成 regime 独有''这一条\emph{未能存活},我们现在给出修正版:该优势\textbf{受模型限制,而非受 regime 限制}。
+
+修正它的是~\ref{sec:axiabl} 与~\ref{sec:realimu} 两项追测,这一对也是本项目最有价值的产出。~\ref{sec:axiabl} 拆掉了``不可约简''的解释:行走级失效不是无法避免的模型类残差,而是漏掉 roll——一个完全可抵消、补上只需 0.04 ms/帧的相机运动分量。~\ref{sec:realimu} 随后拆掉了另一条逃生路线——``副本太差无法评判模型''——用真手机陀螺仪替换 SLAM 差分替身($r{=}0.958$、$R^2{=}0.87$):在这份干净副本上,已发布的二维预测器让残差\emph{更差}($1.36\times$),而三轴单应让它\emph{更好}($0.84\times$)。所以真实手持视频上的干净副本\emph{确实}买到残差抵消,而那条长期负结果至少有一部分是预测器的性质,而不是环境或副本的性质。
+
+需要指出两条主张在检验难度上的不对称:那条负结论出自已发布配置且没有消融;而修正版需要一次消融、一个去重后的段池、一项在两窗口两口径下的审计,以及一台硬件陀螺仪。边界移动了,而它移动的原因正是:它当初是从一次未被解释的单点测量里画出来的。
+
+不受影响的是语义主张:这一切都没有恢复触发器``选取语义重要帧''的能力,采集期的语义仲裁仍属视觉模型侧上游。对协议层设计而言,负结果仍是正面资产——它们划清了这类滤波器该接在什么位置(运动去重/带宽预筛/合成 rig 的采集筛选)——但这个边界现在是由实验画出来的,而不是由未经检验的假设画出来的。
+
+\section{可迁移的设计原则}
+
+把生物电路里被进化验证过的结构原则逐条落成代码,再用实验检验它们何时成立、何时失效——这是本项目的方法论核心。五条原则及其工程边界:
+
+\subsection{原则一:预测先于检测}
+
+\textbf{生物侧}:ELL 的输出细胞对鱼自己发出的强干扰的响应被压到接近零,猎物信号是被``减出来的''。在有副本的前提下,预测自干扰比检测外源目标容易几个数量级;进化把神经资源全花在容易的那半边。
+
+\textbf{工程侧}:H.264 的 P 帧、背景减除、AEC、模型残差检验都是同一结构的实例。本项目的触发分数是 gyro-warp 后 $z$ 分数残差——预测器的副产品,零训练零标注(用它打赢了 4 倍预算的均匀采样)。反例记录在案:没有预测器的朴素帧差在旋转场景召回归零,正是``跳过预测直接检测变化''的下场。
+
+\textbf{边界}:``可预测''是 regime 相关的。桌面 egocentric 视频里自运动亚像素、warp 物理上中性,残差退化为朴素帧差。判断一个数据流值不值得上这层结构,先看主导变化的成分是否有副本可预测——\textbf{先判断 regime,再谈结构}。
+
+\subsection{原则二:用最便宜的副本做预测}
+
+\textbf{生物侧}:鱼没有``用感觉算感觉''——cancel 自干扰的依据是运动指令的副本,在动作发出的同一时刻可得,零延迟、零额外传感、零因果歧义。
+
+\textbf{工程侧}:AEC 直接用扬声器播放信号做参考,而不是从录音里``听出''回声;主动降噪用音乐信号本身做参考。控制信号总是比它的可观察后果便宜且更精确。相机 rig 里陀螺仪就是``运动指令副本''的可得形态。成本账(表~\ref{tab:cost})是这条原则的量化:gyro 副本 + warp = 0.03 ms,``用感觉补偿感觉''(DIS 光流)= 3.8 ms,贵 120 倍且依赖纹理。
+
+\textbf{边界}:副本有精度极限——IMU 噪声、IMU--视频时间同步误差、SLAM 轨迹的相对位姿误差。可行条件是:\textbf{副本能兜住的预测误差量级,必须小于残差读数的目标分辨率}。f\_map 标定误差与同步误差直接折算成 warp 的亚像素错位,而 28$\times$28 特征图上的噪声地板恰好也在亚像素量级——这就是为什么桌面级自运动下 gyro warp 读不出收益,而合成 rig 的 3$\times$运动下收益显著。
+
+\subsection{原则三:可塑性是局部、在线、无时钟的}
+
+ELL 的突触时时刻刻在双向更新,没有全局监督、没有 epoch、没有反向传播;工程对应物是逐帧 EMA/sign 更新——$O(1)$ 空间、环境变了几十秒内重收敛、无需标注。这是它相对任何``在线学习网络''的结构性优势。边界:局部规则的稳健性依赖具体规则——``正在惊讶的细胞不学习''这个门控在生物的稀疏 surprise 下成立,在真实视频的稠密 surprise 下冻结;修复(winsorized always-update)仍是纯局部规则。\textbf{局部性没错,错的是把生物的输入统计假设当成免费的。}
+
+\subsection{原则四:稳健性来自结构,不来自调参}
+
+连接组学的单元测试:持续注入零均值噪声后取消精度几乎不动,而这个稳健性强烈依赖双可塑性位点\textbf{同时}存在。工程对应物是把鲁棒性预算花在组件冗余与分工上(快慢两级、常开 + 按需),而不是单一组件的精调。本项目按这条原则设计了仲裁级联(gyro 常开 + DIS 按需,对应 MG + 输出细胞双位点);winsorized 统计是结构替换而非参数调整(门的时间常数怎么调都修不了冻结)。边界:结构有成本,每加一个位点就多一份需要独立验证的假设。
+
+\subsection{原则五:节能即架构}
+
+ELL cancel 的是自己最强烈的输入(EOD 比猎物信号强几个数量级),进化把突触资源花在收益最大的地方。对相机 rig,``最强、最可预测、cancel 收益最大''的成分永远是自运动视流。边界:主导可预测成分随平台变(行走机器人 = 旋转 + 平移,桌面 = 微动,车载 = 结构化场景流),协议层实现时预测器要可插拔。
+
+\section{讨论与展望}
+
+\subsection{对更大议题的启发}
+
+\textbf{对 AI 数据管线}:主流范式是``全量采集 $\to$ 离线清洗 $\to$ 训练''。残差触发提出另一条路:\textbf{采集端自带一个在线、免标注的重要性滤波器}。在 always-on 设备时代,这个滤波器可能比模型侧的任何单一改进都更值——它改变的是进入训练管线的数据的成本结构。
+
+\textbf{与事件相机的关系}:殊途同归(都回答``只传输变化''),但本路线用现成 IMU 把``硅片问题''变成``软件问题'',且保留 RGB 上下文——事件相机丢掉的恰恰是残差之外的背景,而背景对下游训练有价值(表~\ref{tab:headline} 中残差触发打赢 oracle 的原因之一)。
+
+\textbf{与具身数据采集的关系}:第一人称操作语料正在爆发,采集成本是瓶颈。残差触发 + 伴随放电正好是 egocentric 语料的天然筛选层——已有项目用 Open-AoE 做了反向验证(用它的数据验证筛选层);正向用法(用筛选层降低这类语料的采集成本)受第~\ref{sec:negatives} 节负结果约束,适用范围应限定为运动去重与带宽预筛,而非语义重要性筛选。
+
+\subsection{哪里不能类比}
+
+跨学科的诚实要求明说断裂处,否则映射表就成了包装纸:
+
+\begin{enumerate}
+  \item \textbf{突触可塑性 $\ne$ 梯度下降。}负像学的是近似线性、低维的可预测子空间(EOD 响应是固定波形的缩放);运行统计同理——它吸收平移和缓慢光照/形变,吸收不了语义。指望这一层``预测世界''会失望;它的承诺只是``减掉自己能廉价预测的部分''。
+  \item \textbf{鱼的失效模式 $\ne$ 我们的失效模式。}ELL 对抗的是单一、时钟化、波形固定的强干扰;设备的自运动是高维、非平稳的(旋转 + 平移 + 滚动快门 + 自动对焦 + 曝光)。生物电路是为前者的统计结构优化的,不能逐项照抄。
+  \item \textbf{大脑的``稀疏 surprise''假设不免费。}门控失效(第 6.2 节)证明:生物规则依赖的输入统计性质在工程数据上不成立时,规则本身要换。类比是假设的来源,不是假设的担保。
+  \item \textbf{ELL 只是协议栈的一层。}它不管语义理解,鱼的其他脑区管。残差触发同样是数据采集层,不是端到端感知系统——把它当完整方案会重蹈帧差法的覆辙。
+\end{enumerate}
+
+\subsection{未结项与未来方向}
+
+\begin{itemize}
+  \item \textbf{仲裁级联的真实失效模式验证}:构造或采集含真实 roll、视差、大标定误差的数据,测否决率。注意前提已收窄:真实数据上 gyro warp 本身不赚残差质量,级联的价值只剩``廉价副本失效时的安全网''。
+  \item \textbf{论文中尚未实现的结构}:ON/OFF 对抗通道(两级 vs 一级抑制)与 recurrent 加速(像素路径 cell 间扩散是雏形)。
+  \item \textbf{真机 IMU 通路}:迄今所有真实数据数字都用 SLAM 轨迹差分出的 gyro 替身,而 SLAM 副本在低纹理/快速运动下自身退化(行走段 y 轴符号标定相关系数跌至 $-0.42 \sim -0.59$)。真机 IMU 没有这个问题——iPhone 实拍不再是``验证通路'',而是``真 IMU 能否翻转行走级结论''的实验。
+  \item \textbf{加速器友好化}:全部算子都是平移 + EMA,理论上整套采集层可下沉到 ISP/NPU 旁路。
+  \item \textbf{真实数据正向用法}:语义重要性筛选已证伪,但``运动去重/带宽预筛''(剪掉自运动可解释的冗余片段)是成本账成立的用途。
+\end{itemize}
+
+\section*{结论}
+
+残差触发数据采集展示了从一个 0(神经科学里的一条功能原理)到一个 1(协议栈里可插拔的采集层)的完整路径,也展示了这条路径上最重要的方法论:\textbf{每条生物启发都被翻译成可独立复现的工程问题,正面结果与负面结果被同等记录。}正面结果——合成 regime 下 3.4\% 存储打赢 4 倍预算均匀采样与全预算 oracle、0.17 ms/帧的常开成本——证明``伴随放电--负像--残差''架构可以成立;六个负结果——语义任务不迁移、主场事件 regime 打平、真值平移追测证伪、残差图零事件信号、行走级证伪、骨干替换关闭——则把适用域精确钉在``运动去重/带宽预筛/合成 rig 采集筛选''上,并指明语义重要性仲裁必须发生在视觉模型侧。这一边界知识本身就是协议层设计最有价值的产出。
+
+\begin{thebibliography}{99}
+
+\bibitem{perks2026}
+Perks, K.~E., Petkova, M.~D., Muller, S.~Z., Genecin, M., Ghatare, A., Schalek, R., Wu, Y., Januszewski, M., Jain, V., Lichtman, J.~W., Abbott, L.~F., \& Sawtell, N.~B. (2026).
+Connectome analysis of a cerebellum-like circuit for sensory prediction.
+\emph{Nature}. doi:10.1038/s41586-026-10690-6.
+
+\bibitem{vonholst1950}
+von Holst, E., \& Mittelstaedt, H. (1950).
+Das Reafferenzprinzip: Wechselwirkungen zwischen Zentralnervensystem und Peripherie.
+\emph{Naturwissenschaften}, 37, 464--476.
+
+\bibitem{bell1981}
+Bell, C.~C. (1981).
+An efference copy which is modified by reafferent input.
+\emph{Science}, 214(4519), 450--453.
+
+\bibitem{bastian1986}
+Bastian, J. (1986).
+Gain control in the electrosensory system mediated by descending inputs to the electrosensory lateral line lobe.
+\emph{Journal of Neuroscience}, 6(2), 553--562.
+
+\bibitem{marr1969}
+Marr, D. (1969).
+A theory of cerebellar cortex.
+\emph{Journal of Physiology}, 202(2), 437--470.
+
+\bibitem{albus1971}
+Albus, J.~S. (1971).
+A theory of cerebellar function.
+\emph{Mathematical Biosciences}, 10(1--2), 25--61.
+
+\bibitem{ito1982}
+Ito, M. (1982).
+Cerebellar control of the vestibulo-ocular reflex---around the flocculus hypothesis.
+\emph{Annual Review of Neuroscience}, 5, 275--296.
+
+\bibitem{kawato1992}
+Kawato, M., \& Gomi, H. (1992).
+A computational model of four regions of the cerebellum based on feedback-error learning.
+\emph{Biological Cybernetics}, 68(2), 95--103.
+
+\bibitem{wolpert2000}
+Wolpert, D.~M., \& Ghahramani, Z. (2000).
+Computational principles of movement neuroscience.
+\emph{Nature Neuroscience}, 3, 1212--1217.
+
+\bibitem{raoballard1999}
+Rao, R.~P.~N., \& Ballard, D.~H. (1999).
+Predictive coding in the visual cortex: A functional interpretation of some extra-classical receptive-field effects.
+\emph{Nature Neuroscience}, 2(1), 79--87.
+
+\bibitem{h264}
+Wiegand, T., Sullivan, G.~J., Bj{\o}ntegaard, G., \& Luthra, A. (2003).
+Overview of the H.264/AVC video coding standard.
+\emph{IEEE Transactions on Circuits and Systems for Video Technology}, 13(7), 560--576.
+
+\bibitem{piccardi2004}
+Piccardi, M. (2004).
+Background subtraction techniques: A review.
+\emph{IEEE International Conference on Systems, Man and Cybernetics}.
+
+\bibitem{bouwmans2014}
+Bouwmans, T. (2014).
+Traditional and recent approaches in background modeling for foreground detection: An overview.
+\emph{Computer Science Review}, 11--12, 31--66.
+
+\bibitem{benesty2001}
+Benesty, J., G{\"a}nsler, T., Morgan, D.~R., Sondhi, M.~M., \& Gay, S.~L. (2001).
+\emph{Advances in Network and Acoustic Echo Cancellation}.
+Springer.
+
+\bibitem{gallego2020}
+Gallego, G., Delbr{\"u}ck, T., Orchard, G., Bartolozzi, C., Taba, B., Censi, A., Leutenegger, S., Davison, A.~J., Conradt, J., Daniilidis, K., \& Scaramuzza, D. (2020).
+Event-based vision: A survey.
+\emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 44(1), 154--180.
+
+\bibitem{dis2016}
+Kroeger, T., Timofte, R., Dai, D., \& Van~Gool, L. (2016).
+Fast optical flow using dense inverse search.
+\emph{European Conference on Computer Vision (ECCV)}.
+
+\bibitem{raft2020}
+Teed, Z., \& Deng, J. (2020).
+RAFT: Recurrent all-pairs field transforms for optical flow.
+\emph{European Conference on Computer Vision (ECCV)}.
+
+\bibitem{mobilenetv3}
+Howard, A., Sandler, M., Chu, G., Chen, L.-C., Tan, M., Wang, W., Zhu, Y., Pang, R., Vasudevan, V., Le, Q.~V., \& Adam, H. (2019).
+Searching for MobileNetV3.
+\emph{IEEE/CVF International Conference on Computer Vision (ICCV)}.
+
+\bibitem{dino2021}
+Caron, M., Touvron, H., Misra, I., J{\'e}gou, H., Mairal, J., Bojanowski, P., \& Joulin, A. (2021).
+Emerging properties in self-supervised vision transformers.
+\emph{IEEE/CVF International Conference on Computer Vision (ICCV)}.
+
+\bibitem{dinov2}
+Oquab, M., Darcet, T., Moutakanni, T., Vo, H., Szafraniec, M., Khalidov, V., Fernandez, P., Haziza, D., Massa, F., El-Nouby, A., Assran, M., Ballas, N., Galuba, W., Howes, R., Huang, P.-Y., Li, S.-W., Misra, I., Rabbat, M., Sharma, V., Synnaeve, G., Xu, H., J{\'e}gou, H., Mairal, J., Labatut, P., Joulin, A., \& Bojanowski, P. (2023).
+DINOv2: Learning robust visual features without supervision.
+\emph{Transactions on Machine Learning Research (TMLR)}.
+
+\bibitem{openaoe}
+Ant Research \& InclusionAI (2025).
+Open-AoE: A large-scale egocentric video dataset for embodied AI.
+Technical report, arXiv:2607.14183;
+dataset \texttt{inclusionAI/OpenAoE-2000h} on Hugging Face;
+code \url{https://github.com/ant-research/Open-AoE}.
+
+\end{thebibliography}
+
+\end{document}

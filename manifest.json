@@ -1,310 +1,501 @@
 {
-  "project": "cerebellum-style residual-triggered data collection",
-  "description": "MVP of a data-collection layer that stores only what a camera+IMU rig cannot predict (corollary-discharge cancellation + residual triggering), inspired by Perks et al., Nature 2026 (doi:10.1038/s41586-026-10690-6).",
-  "guide": "GUIDE.md",
-  "readme": [
-    "README.md",
-    "README.zh.md"
+ "project": "cerebellum-style residual-triggered data collection",
+ "description": "MVP of a data-collection layer that stores only what a camera+IMU rig cannot predict (corollary-discharge cancellation + residual triggering), inspired by Perks et al., Nature 2026 (doi:10.1038/s41586-026-10690-6).",
+ "guide": "GUIDE.md",
+ "readme": [
+  "README.md",
+  "README.zh.md"
+ ],
+ "format": {
+  "doc": "GUIDE.md §4.1",
+  "implementation": "cerebellum_cancel/record.py",
+  "tests": [
+   "tests/test_record.py",
+   "tests/test_record_sink.py"
   ],
-  "updated": "2026-09-09",
-  "datasets": [
-    {
-      "path": "data/dataset",
-      "type": "synthetic-rig",
-      "description": "Rendered rig: static textured scene + gyro-driven camera rotation + injected blob/bar surprise events. The primary benchmark (train/val splits, frames + imu.csv + events.json + featmaps.npy per sequence).",
-      "size": "3.0G",
-      "producers": [
-        "scripts/make_dataset.py",
-        "scripts/extract_featmaps.py"
-      ]
-    },
-    {
-      "path": "data/synthetic",
-      "type": "synthetic-demo",
-      "description": "60-second single-scene demo used by the pixel-pipeline experiment (scripts/run_experiment.py).",
-      "size": "77M",
-      "producers": [
-        "scripts/make_synthetic.py"
-      ]
-    },
-    {
-      "path": "data/webcam_rec",
-      "type": "real-capture",
-      "description": "Webcam field test: real camera, synthetic scene motion, no IMU (sines emulated offline). Used for the webcam readout in README.",
-      "size": "18M",
-      "producers": [
-        "scripts/capture_webcam.py"
-      ]
-    },
-    {
-      "path": "data/aoe_src",
-      "type": "external-raw",
-      "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. 9 segments fetched by scripts/fetch_aoe.py (probe 60 -> greedy scene/verb select -> fetch): aoe_20260214_232847_p000 (kitchen/unboxing) + 8 raw_*_seg_* (bathroom, bedroom, childs-room, dining/kitchen/living, workshop, workspace, shop; 134-301 s each).",
-      "size": "4.1G",
-      "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h",
-      "producers": [
-        "scripts/fetch_aoe.py"
-      ]
-    },
-    {
-      "path": "data/aoe_motion",
-      "type": "prepared-real",
-      "description": "High-motion Open-AoE pair (top of 259-probed pool by trajectory rotation: p95 |yaw| 51.6/31.0 deg/s; bathroom/hallway/laundry + warehouse/workshop), same layout as data/aoe. Frames deleted after evals (regenerate via prep_aoe.py).",
-      "size": "0.5G",
-      "producers": [
-        "scripts/fetch_aoe.py",
-        "scripts/prep_aoe.py",
-        "scripts/extract_featmaps.py"
-      ]
-    },
-    {
-      "path": "data/aoe",
-      "type": "prepared-real",
-      "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_011, 12 segments. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing. Also carries features.npy (576-d pooled, streamed from mp4 by scripts/extract_features_aoe.py) and verb_labels.npy (9-class frame-level verbs, scripts/make_verb_labels.py; verbs.json at dataset root) for the real-data downstream value experiment (105-run CV, runs/downstream_aoe_cv.json).",
-      "size": "3.4G",
-      "producers": [
-        "scripts/fetch_aoe.py",
-        "scripts/prep_aoe.py",
-        "scripts/extract_featmaps.py",
-        "scripts/extract_features_aoe.py",
-        "scripts/make_verb_labels.py"
-      ]
-    },
-    {
-      "path": "data/aoe_motion_448",
-      "type": "prepared-real",
-      "description": "Same high-motion Open-AoE pair rendered at 448px input (f_map doubled to ~38.3, 38x38 featmaps) for the resolution cross-check. Frames are symlinks into prep_aoe output and are deleted after evals alongside data/aoe_motion frames; featmaps/imu/events kept for re-running quality evals (regenerate frames via prep_aoe.py).",
-      "size": "1.8G",
-      "producers": [
-        "scripts/prep_aoe.py",
-        "scripts/extract_featmaps.py"
-      ]
-    },
-    {
-      "path": "data/aoe_event",
-      "type": "prepared-real",
-      "description": "10 event-type Open-AoE segments (5 original desktop-level + 5 high-motion, gyro p95 23-75 deg/s, selected by scripts/select_event_segments.py: event-verb filter 3-30% event fraction, motion floor, scene diversity cap) (verbs drop/throw/toss/break; event fraction 3.3-26.3%) prepared by scripts/prep_aoe.py --event-verbs: events.json carries the derived event intervals (note.event_verbs), gyro from trajectory differentiation, featmaps + 576-d pooled features for the sparse-event downstream check (GUIDE 2.3.7). Frames not kept on disk (regenerable from data/aoe_src).",
-      "size": "1.6G",
-      "producers": [
-        "scripts/fetch_aoe.py",
-        "scripts/prep_aoe.py",
-        "scripts/extract_featmaps.py",
-        "scripts/extract_features_aoe.py",
-        "scripts/select_event_segments.py"
-      ]
-    },
-    {
-      "path": "data/aoe_motion_walk",
-      "type": "prepared-real",
-      "description": "4 walking-level high-motion Open-AoE segments (gyro p95 71-75 deg/s; field/kitchen/balcony/multi-room) prepared by scripts/prep_aoe.py and selected by scripts/select_walk_segments.py (motion floor >= 40 deg/s, scene diversity). Walking-level probe for the gyro-warp value hypothesis (runs/flow_eval_walk.json). Frames not kept on disk (regenerable via prep_aoe.py); featmaps/imu/events persist.",
-      "size": "0.9G",
-      "producers": [
-        "scripts/fetch_aoe.py",
-        "scripts/select_walk_segments.py",
-        "scripts/prep_aoe.py",
-        "scripts/extract_featmaps.py"
-      ]
-    }
+  "description": "Residual record format v2: the on-disk container for the acquisition layer's decisions. Self-describing header, int8+deadband+zlib z-map payload, lossless float64 decision scalars, stats sidecar (mu/var/F_prev) enabling cross-recording warm start, length-prefixed frame blocks for power-loss recovery."
+ },
+ "dataset_format": {
+  "doc": "GUIDE.md §4.2",
+  "implementation": "cerebellum_cancel/dataset.py",
+  "integrity": "cerebellum_cancel/integrity.py",
+  "builder": "scripts/build_dataset.py",
+  "tests": [
+   "tests/test_dataset.py"
   ],
-  "results": [
-    {
-      "path": "runs/resolution_report.md",
-      "producer": "scripts/run_repeat_eval.py",
-      "note": "10x repeat-measurement protocol for the resolution axis (machine-readable numbers in runs/resolution_bench10x.json). Quality metrics re-run once per size and verified EXACT (max diff 0.0) against the recorded sweep; latency bench repeated 10x per size.",
-      "headline": "Quality is bit-exact across re-runs at all three input sizes (deterministic pipeline). Latency 10-run distributions: gyro shift 0.032/0.063/0.089 ms (224/336/448), DIS 3.83+-0.04/4.28+-0.43/4.34+-0.17 ms, backbone fwd ~1.0-1.2 ms (+-30%), full flow step 4.5-5.7 ms."
-    },
-    {
-      "path": "runs/flow_eval_res224.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 224 px input (40 train + 25 val seqs); part of the resolution series, see runs/flow_eval_res336/448.json",
-      "headline": "synthetic rig @224px (f_map 24.25): val calm residual naive 0.221 / gyro 0.130 / flow 0.107; gyro shift 0.032 ms, DIS 3.86 ms per frame."
-    },
-    {
-      "path": "runs/flow_eval_res336.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 336 px (f_map 36.38). backbone_fwd_ms re-measured standalone after fixing bench() to honor --size (bench_note inside the JSON).",
-      "headline": "synthetic rig @336px: val calm residual naive 0.187 / gyro 0.089 / flow 0.069 (-52% gyro gain); gyro shift 0.061 ms, DIS 4.20 ms per frame."
-    },
-    {
-      "path": "runs/flow_eval_res448.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "resolution-axis run at 448 px (f_map 48.50). backbone_fwd_ms re-measured standalone (bench_note inside the JSON). At 448 px the gated trigger froze to 0 clips on all 5 checked val seqs; winsorized robust stats fired on all 5 (val seq_000..004, checked in the same session).",
-      "headline": "synthetic rig @448px: val calm residual naive 0.169 / gyro 0.072 / flow 0.052 (-58% gyro gain, monotone in resolution, not saturated); gyro shift 0.087 ms, DIS 4.35 ms per frame; flow/gyro gap narrows 0.82 -> 0.73."
-    },
-    {
-      "path": "runs/flow_eval.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "overwritten on every run; the runs referenced from docs are backed up as separate files: flow_eval_motion.json (real high-motion 224px), flow_eval_motion448.json (same pair at 448px), flow_eval_synth448.json (synthetic 448px), flow_eval_aoe9.json (9 desk clips, rebuilt from log).",
-      "headline": "current content: aoe_motion_448 --n-train 0 --n-val 2 --robust. Calm residual naive 0.0535 / gyro 0.0614 (still hurts, +15%) / flow 0.0684 (flips per-sequence: 0.086 hallway, 0.051 warehouse). The synthetic design rule 'finer features turn the gyro warp positive' does NOT transfer to real high-motion -- unmodeled translation/parallax dominates, not estimator error."
-    },
-    {
-      "path": "runs/flow_eval_aoe9.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "rebuilt from logged per-seq output of the 27ed74d n=9 run (see runs/flow_eval.json note)",
-      "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination; gyro-warp calm residual ~= naive everywhere."
-    },
-    {
-      "path": "runs/downstream_results.json",
-      "producer": "scripts/train_downstream.py",
-      "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
-      "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
-    },
-    {
-      "path": "runs/detection_synth_results.json",
-      "producer": "scripts/train_detection_synth.py",
-      "note": "detection-grade downstream on the synthetic rig (roadmap item 1): CenterNet-style heatmap head on frozen featmaps, VOC-style detection AP vs exact bbox GT from make_dataset.py, 20 seeds. Diagnosis (no rig bug; frozen-feature bottleneck): scripts/diag_detection_rig.py, scripts/diag_upper_bound.py, runs/diag_*.png.",
-      "headline": "NEGATIVE: cerebellum (3.4% stored) detAP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003 — all noise-level, 1-sigma overlapping. Perfect-prediction eval gives AP=1.0 (regression test), so the null is the bottleneck: MobileNetV3 features[:3] does not encode the flat blobs (full-data upper bound: train AP 0.56 / val 0.003; in-distribution train-on-val ceiling 0.415)."
-    },
-    {
-      "path": "runs/acquisition_demo.json",
-      "producer": "scripts/demo_acquisition.py",
-      "note": "protocol-layer demo (roadmap item 3): AcquisitionLayer driving real webcam capture (1950 frames, robust stats), residual heatmap overlay at runs/acquisition_demo_peak.png.",
-      "headline": "keep 6 clips, frame-level storage 14.4%, surprise peak-frame residual heatmap confirms hair-motion region; robust stat profile consistent with the 22-segment cross-scene conclusion."
-    },
-    {
-      "path": "runs/trigger_scan_s8.json",
-      "producer": "scripts/run_trigger_scan_s8.py",
-      "note": "backbone-replacement closure (roadmap item 2): same-protocol 40-train-segment trigger scan, DINOv1 ViT-S/8 (28x28 native grid) vs MobileNetV3. S/8 features extracted online, nothing persisted. Diagnosis scripts: scripts/diag_dino_trigger*.py.",
-      "headline": "NEGATIVE: S/8 fires 3/40 segments vs MNV3 11/40. Patch tokens have sufficient event discrimination (ev99 0.27 vs 0.23) but insufficient persistence (z_ema peaks stall below gate 6). Closes the backbone route: DINOv2 S/14 unfixable in-protocol (per-channel std is identity in the residual pipeline), DINOv2 S/8 weights delisted by Meta."
-    },
-    {
-      "path": "runs/downstream_dino.json",
-      "producer": "scripts/train_downstream.py --featmaps featmaps_dino.npy",
-      "note": "DINOv2 S/14 frame-level comparison, 20-seed protocol as runs/downstream_results.json. cerebellum/oracle rows degenerate (0 stored frames — S/14 adaptive trigger fires zero clips).",
-      "headline": "Only uniform rows informative: 5.2% stored / AP 0.196 / evRec@10 0.79 (below published MNV3 cerebellum 0.298). Uniform budgets 0.5x-4x collapse to identical 1240 frames: pre-existing zero-budget floor when the cerebellum mask is empty (also affects published MNV3 rows; fix pending maintainer decision)."
-    },
-    {
-      "path": "runs/detection_synth_dino_results.json",
-      "producer": "scripts/train_detection_synth.py --featmaps featmaps_dino.npy",
-      "note": "DINOv2 S/14 detection-level grid, 20 seeds. cerebellum/oracle 0 frames stored; uniform rows detAP NaN (all-zero-peak seeds expose a pre-existing eval fragility: detection_ap returns NaN with no peaks, nanmean over all-NaN).",
-      "headline": "No informative comparison: cerebellum/oracle degenerate at 0 frames, uniform NaN. Kept as raw archive alongside runs/detection_synth_results.json (MNV3 negative)."
-    },
-    {
-      "path": "runs/arbiter_eval.json",
-      "producer": "scripts/run_arbiter_eval.py",
-      "note": "last run: data/aoe_motion --n-val 2 --robust. The n=9 desk-clip run was overwritten and rebuilt from its logged aggregate output as runs/arbiter_eval_aoe9.json.",
-      "headline": "aoe_motion robust: seq_000 130 runs, 14 vetoes, runs-level stored 0.92->0.62 at precision 1.00 (evRec 1.00->0.82); seq_001 0 vetoes; amortized flow 0.58 ms/frame. AoE n=9 desk numbers: 140 runs/seq, stored 0.89->0.72, evRec 1.00->0.94 (runs/arbiter_eval_aoe9.json)."
-    },
-    {
-      "path": "runs/arbiter_eval_aoe9.json",
-      "producer": "scripts/run_arbiter_eval.py",
-      "note": "rebuilt from logged aggregate output of the 27ed74d n=9 run (see runs/arbiter_eval.json note)",
-      "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
-    },
-    {
-      "path": "runs/downstream_clips.json",
-      "producer": "scripts/train_downstream.py",
-      "note": "per-clip selection records for the downstream comparison"
-    },
-    {
-      "path": "runs/raft_eval_data_dataset_val.json",
-      "producer": "scripts/run_raft_eval.py",
-      "note": "RAFT (ECCV 2020, raft-things) plugged into the same warp path as DIS, synthetic val first 5 seqs.",
-      "headline": "calm residual naive 0.2210 / gyro 0.1290 / DIS 0.1056 / RAFT 0.1054 (tie); latency DIS 5.9 ms vs RAFT 134 ms per frame. The flow ceiling is estimator-independent."
-    },
-    {
-      "path": "runs/raft_eval_data_aoe_motion_val.json",
-      "producer": "scripts/run_raft_eval.py",
-      "note": "same, real high-motion pair (data/aoe_motion, robust stats).",
-      "headline": "calm residual naive 0.0801 / gyro 0.0901 / DIS 0.0522 / RAFT 0.0544 (RAFT marginally worse); latency DIS 7.4 ms vs RAFT 138 ms."
-    },
-    {
-      "path": "runs/portable_check.json",
-      "producer": "scripts/run_portable_check.py",
-      "note": "CPU vs Apple Silicon MPS on data/dataset/val/seq_000 (32 frames): feature extraction and downstream gyro rollout compared across devices.",
-      "headline": "feature max rel diff 2e-6, gyro calm residual diff 3.7e-9 (numerically device-portable); backbone fwd 1.76 ms CPU vs 1.06 ms MPS (1.7x)."
-    },
-    {
-      "path": "runs/flow_eval_motion448.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "448px resolution cross-check on the real high-motion pair (data/aoe_motion_448: frames symlinked at 448, featmaps re-extracted, f_map doubled to 38.33).",
-      "headline": "calm residual naive 0.0535 / gyro 0.0614 (warp still hurts) / flow 0.0684 (per-seq 0.0861/0.0507). Design rule from the synthetic sweep does not transfer to real data."
-    },
-    {
-      "path": "runs/flow_eval_synth448.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "backup of the flow_eval.json state before the 448px real cross (synthetic rig at 448px input).",
-      "headline": "synthetic 448px quality: train naive 0.0750/gyro 0.0453/flow 0.0336, val 0.1694/0.0717/0.0523 (gyro gain -58%, the top of the resolution sweep)."
-    },
-    {
-      "path": "runs/trans_eval_data_aoe_motion_val.json",
-      "producer": "scripts/run_trans_eval.py",
-      "note": "translation-term evaluation on the real high-motion pair (rotation-only vs rotation+constant-depth translation vs DIS). prep_aoe.py exports camera-frame translation velocity (SLAM trajectory) + a per-segment 1/Z scale calibrated against DIS flow.",
-      "headline": "NEGATIVE: constant-depth uniform translation warp hurts (calm residual gyro 0.0901 -> gyro+trans 0.0938, both seqs). Real scenes are depth-structured; the model class is wrong, calibration cannot fix it."
-    },
-    {
-      "path": "runs/downstream_aoe_results.json",
-      "producer": "scripts/train_downstream_aoe.py",
-      "note": "real-data downstream value rerun on Open-AoE (scripts/extract_features_aoe.py streams 576-d pooled features from the source mp4; scripts/make_verb_labels.py builds 7-class frame-level verb labels — the binary active-manipulation mask is degenerate on 8/9 segments). 6 segments train / 3 val, robust trigger, one-vs-rest logistic heads. SUPERSEDED by runs/downstream_aoe_cv.json (12-seg 3-fold x 35 seed = 105 runs/method).",
-      "headline": "NEGATIVE / no transfer (single-split legacy run): cerebellum stored 7.1% val mAP 0.197 vs uniform(0.5x) 0.209, oracle 0.203. Use runs/downstream_aoe_cv.json for the error-barred conclusion."
-    },
-    {
-      "path": "runs/downstream_aoe_cv.json",
-      "producer": "scripts/run_downstream_aoe_cv.py",
-      "note": "Robust version of the real-data downstream value experiment: 12 Open-AoE segments, 3-fold cross-segment CV x 35 seeds = 105 runs per method, 9 verb classes (fold/grasp/hold/insert/lift/set_down/thread/unfold/wipe) one-vs-rest logistic heads. Rebuilds data/aoe/verbs.json over the 12 segments.",
-      "headline": "NEGATIVE with stats: cerebellum stored 16.0% mAP 0.162+-0.077 ivRec 0.67+-0.12 vs uniform(1x) 0.173+-0.082, oracle (13.2%) 0.164+-0.088 — all mAP within 1 sigma. 'No transfer' is now a statistical conclusion, not a single-split observation."
-    },
-    {
-      "path": "runs/downstream_event_results.json",
-      "producer": "scripts/train_downstream_event.py",
-      "note": "Sparse physical event regime check (GUIDE 2.3.7): 10 Open-AoE segments with drop/throw/toss/break verbs (5 original desktop-level + 5 high-motion gyro p95 23-75 deg/s selected by scripts/select_event_segments.py), binary event-frame detection from atomic-action intervals, leave-one-segment-out x 25 seeds = 250 runs per method. 5-segment version was overwritten by this run.",
-      "headline": "NEGATIVE, pinned: cerebellum (23.4% stored) AP 0.108+-0.094 ~= uniform(1x) (23.6%) 0.104+-0.084; oracle (7.9%) best at 0.144+-0.128 but margin shrank vs the 5-seg run (0.204) and evRec no longer leads — kinetic unpredictability as an importance signal is confirmed ineffective on real egocentric data (10 segs, 250 runs, desktop-to-high-motion); the translation-check (runs/trans_eval_data_aoe_event_val.json) closed the escape route: residual noise is world motion (hands), GT translation explains nothing."
-    },
-    {
-      "path": "runs/flow_eval_event.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "Quality + latency baseline on the 5 event segments (data/aoe_event), robust trigger. Backup of the flow_eval.json output of that run.",
-      "headline": "Event-seg latency baseline: DIS 8.18 ms, gyro shift 0.033 ms, pixel core 0.184 ms, backbone fwd 1.06 ms, full flow step 6.40 ms per frame."
-    },
-    {
-      "path": "runs/trans_eval_data_aoe_event_val.json",
-      "producer": "scripts/run_trans_eval_event.py",
-      "note": "Event-segment translation check (roadmap item 1): GT camera-frame translation from the AM trajectory is exported in data/aoe_event imu.csv; rotation vs rotation+constant-depth translation warp on featmaps, with frame residual decomposed inside/outside annotated event intervals. No frames needed.",
-      "headline": "NEGATIVE + diagnosis: gyro_trans is worse than gyro on every segment, inside AND outside event intervals (mean calm 0.0679 -> 0.0704); residual inside events ~= outside (0.197 vs 0.193). The event-regime noise is WORLD motion (hands), not egomotion — translation modeling cannot fix 2.3.7, and the flow-arbiter veto experiment (roadmap item 2) is absorbed: flow can only veto camera-motion-explainable candidates, and GT translation already fails to explain the residual."
-    },
-    {
-      "path": "runs/downstream_event_zreadout.json",
-      "producer": "scripts/train_downstream_event_zreadout.py",
-      "note": "Readout-upgrade test (roadmap item 1): same 10-seg LOO x 25 seeds = 250 runs/cell protocol as downstream_event_results, but the downstream input is a spatial readout of the z-map instead of backbone features. Readouts: zamp (1-d global mean of channel-summed z^2), zpyr (21-d log1p spatial pyramid 1+2x2+4x4), feat (576-d baseline), feat+zpyr (concat). Methods: cerebellum / uniform(1x) / oracle.",
-      "headline": "NEGATIVE, decisive: zamp AP is bit-identical across all three storage methods (0.129+-0.098) -- logistic learns zero weights on a signal-free feature and AP collapses to the val event-rate constant; zpyr ~= zamp (spatial pattern adds nothing); feat+zpyr ~= feat (no complementarity); high z-readout evRec (0.84-0.87) is a budget artifact. The z-map carries no event-discriminative information in amplitude OR spatial pattern -- the last value exit inside the motion-prediction framing is closed."
-    },
-    {
-      "path": "runs/flow_eval_walk.json",
-      "producer": "scripts/run_flow_eval.py",
-      "note": "Walking-level probe (roadmap item 2): 4 high-motion large-scene Open-AoE segments (data/aoe_motion_walk, selected by scripts/select_walk_segments.py, gyro p95 71-75 deg/s: field/kitchen/balcony/multi-room). Quality (robust, calm residual) + latency. Backup of the flow_eval.json output of that run; frames deleted after eval (featmaps/imu/events kept, regenerable).",
-      "headline": "NEGATIVE for gyro value: gyro warp is worse than naive on 3/4 walking-level segs (mean calm 0.1429 -> 0.1582, +11%; per-seq naive/gyro/flow: 0.2105/0.2260/0.1366, 0.1187/0.1445/0.0697, 0.1712/0.1687/0.1320, 0.0713/0.0935/0.0830). DIS flow still wins quality everywhere (mean 0.105, -26% vs naive) at 8.5 ms vs 0.033 ms gyro shift. 'Higher motion -> corollary discharge pays off' FALSIFIED: real-data residual-quality advantage is a synthetic-regime property; walking-level damage is dominated by model-class errors (translation/parallax/rolling shutter) and SLAM-copy degradation."
-    }
+  "description": "Multimodal dataset format (schema cmci-dataset-1): turns an always-on multimodal stream into trainable assets. One directory = manifest.json + README.md + sections/<id>.npz + <id>.json. Single hard contract: every payload's axis 0 is the same frame index = n_frames (validated on both write and read). Payloads: t/gyro/score(float64, lossless decision contract)/surprise/keep/weight + optional accel/frames_jpg/residual/labels. Three deliverables: (1) modality-aligned trainable samples, (2) per-frame information-density weight, (3) per-section acquisition-integrity markers. Distinct from record.py: that is online single-stream logging (power-loss safe, resumable); this is an offline dataset container (trainable, publishable).",
+  "weight_semantics": "weight = clip(surprise/median(surprise), 1e-3, 10) = residual INCOMPRESSIBILITY, stored as a DIAGNOSTIC READOUT. It is NOT semantic importance and NOT event timing (falsified over four rounds), and as of 2026-09-12 it is ALSO NOT a basis for balanced-difficulty sampling: the pre-registered criterion (scripts/eval_weight_value.py, leave-one-section-out x 20 seeds) came back negative -- weight top-10% frames contain a positive rate indistinguishable from random (2/10 sections beat the random p95, i.e. exactly the 5% chance level), while the negative control (a label-change-rate proxy) beats it in 9/10 sections, proving the harness CAN detect a useful weight. Median ratio (weight top-10% positive rate / base rate) = 0.905. Downstream AP difference vs uniform was +0.020, well inside the 0.091 sampling noise. DO NOT use this field to drive sampling decisions; keep it only as a per-frame incompressibility readout. See GUIDE 4.2 for the full table."
+ },
+ "input_contracts": {
+  "doc": "GUIDE.md §4.4",
+  "implementation": "cerebellum_cancel/contracts.py",
+  "enforced_in": [
+   "cerebellum_cancel/core.py",
+   "cerebellum_cancel/integrity.py",
+   "cerebellum_cancel/adapter.py",
+   "cerebellum_cancel/dataset.py",
+   "cerebellum_cancel/rotwarp.py",
+   "cerebellum_cancel/pipeline.py"
   ],
-  "figures": [
-    {
-      "path": "runs/aoe_peaks",
-      "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
-    },
-    {
-      "path": "runs/inspect_*.jpg",
-      "description": "Synthetic-rig frame inspections (event rendering checks)."
-    },
-    {
-      "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
-      "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
-    },
-    {
-      "path": "runs/debug_sync.png / runs/blend_*.png",
-      "description": "IMU-video sync and warp-vs-frame blend debug images."
-    }
+  "tests": [
+   "tests/test_contracts.py",
+   "tests/test_rotwarp.py"
   ],
-  "logs": [
-    {
-      "path": "runs/capture.log",
-      "description": "webcam capture log"
-    },
-    {
-      "path": "runs/screencap*.log",
-      "description": "screen recording experiments"
-    },
-    {
-      "path": "runs/play*.log",
-      "description": "scene playback logs"
-    }
-  ]
+  "description": "Input contracts / industrial-stability layer. Single source of truth for validation: a probe measured 13 invalid inputs against the pre-hardening code and found 9 that silently passed, returning numerically plausible but semantically wrong results. Adds 4 exception classes (ShapeError/NonFiniteError/ConfigError/InsufficientDataError) that all also inherit ValueError, so introducing validation is not a breaking change for existing `except ValueError` callers. Worst pre-existing case: integrity.report returned a '0 spikes' report for all-NaN input, i.e. reported data corruption as all-clear.",
+  "deliberate_boundaries": [
+   "dt<=0 is LEGAL (defined semantics: action feature keeps only its bias term) and must not be turned into an error; dt=NaN is rejected. Guarded by test_dt_zero_is_still_allowed.",
+   "Short recordings are still written, but their integrity verdict is recorded as 'insufficient_data' rather than 'ok' -- writing data and judging data are separate concerns, and 'no conclusion' must never masquerade as 'pass'. requires integrity.MIN_ANALYSIS_FRAMES (=200) frames to emit a verdict.",
+   "check_gyro validates shape and finiteness but deliberately NOT magnitude: resting gyro can be sub-deg/s while a fast flick exceeds 100 deg/s, so any magnitude threshold would false-alarm on legal data.",
+   "Validation in core.process is atomic: the NaN check runs before any statistic is mutated, so a rejected call never leaves a half-updated state."
+  ],
+  "no_behaviour_change_evidence": "Rebuilding the real AOE event dataset after hardening reproduced per-segment metrics bit-identically (seq_000 keep=0.205, seq_001 keep=0.098, 10 sections all verdict=ok) -- validation only added failure modes, it changed no valid-path arithmetic."
+ },
+ "updated": "2026-09-12",
+ "datasets": [
+  {
+   "path": "data/dataset",
+   "type": "synthetic-rig",
+   "description": "Rendered rig: static textured scene + gyro-driven camera rotation + injected blob/bar surprise events. The primary benchmark (train/val splits, frames + imu.csv + events.json + featmaps.npy per sequence).",
+   "size": "3.0G",
+   "producers": [
+    "scripts/make_dataset.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/synthetic",
+   "type": "synthetic-demo",
+   "description": "60-second single-scene demo used by the pixel-pipeline experiment (scripts/run_experiment.py).",
+   "size": "77M",
+   "producers": [
+    "scripts/make_synthetic.py"
+   ]
+  },
+  {
+   "path": "data/webcam_rec",
+   "type": "real-capture",
+   "description": "Webcam field test: real camera, synthetic scene motion, no IMU (sines emulated offline). Used for the webcam readout in README.",
+   "size": "18M",
+   "producers": [
+    "scripts/capture_webcam.py"
+   ]
+  },
+  {
+   "path": "data/aoe_src",
+   "type": "external-raw",
+   "description": "Raw Open-AoE segment source (ant-research OpenAoE-2000h via hf-mirror): camera_traj.npz (SLAM cam_c2w), ego_action_annotation.json, undistorted mp4. 9 segments fetched by scripts/fetch_aoe.py (probe 60 -> greedy scene/verb select -> fetch): aoe_20260214_232847_p000 (kitchen/unboxing) + 8 raw_*_seg_* (bathroom, bedroom, childs-room, dining/kitchen/living, workshop, workspace, shop; 134-301 s each).",
+   "size": "4.1G",
+   "source": "https://hf-mirror.com/datasets/inclusionAI/OpenAoE-2000h",
+   "producers": [
+    "scripts/fetch_aoe.py"
+   ]
+  },
+  {
+   "path": "data/aoe_motion",
+   "type": "prepared-real",
+   "description": "High-motion Open-AoE pair (top of 259-probed pool by trajectory rotation: p95 |yaw| 51.6/31.0 deg/s; bathroom/hallway/laundry + warehouse/workshop), same layout as data/aoe. Frames deleted after evals (regenerate via prep_aoe.py).",
+   "size": "0.5G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/aoe",
+   "type": "prepared-real",
+   "description": "Open-AoE segments converted to the standard sequence layout by scripts/prep_aoe.py: gyro derived from trajectory differentiation (sign auto-calibrated vs DIS flow), per-segment real f_map (10.95-19.17), events = active-manipulation intervals. val/seq_000..seq_011, 12 segments. NOTE: frames/*.png are NOT kept on disk (22 GB lossless stills, regenerable from data/aoe_src videos in ~2 min/segment via prep_aoe.py); only featmaps.npy + imu.csv + events.json persist. Eval scripts error out with a re-prep hint if frames are missing. Also carries features.npy (576-d pooled, streamed from mp4 by scripts/extract_features_aoe.py) and verb_labels.npy (9-class frame-level verbs, scripts/make_verb_labels.py; verbs.json at dataset root) for the real-data downstream value experiment (105-run CV, runs/downstream_aoe_cv.json).",
+   "size": "3.4G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py",
+    "scripts/extract_features_aoe.py",
+    "scripts/make_verb_labels.py"
+   ]
+  },
+  {
+   "path": "data/aoe_motion_448",
+   "type": "prepared-real",
+   "description": "Same high-motion Open-AoE pair rendered at 448px input (f_map doubled to ~38.3, 38x38 featmaps) for the resolution cross-check. Frames are symlinks into prep_aoe output and are deleted after evals alongside data/aoe_motion frames; featmaps/imu/events kept for re-running quality evals (regenerate frames via prep_aoe.py).",
+   "size": "1.8G",
+   "producers": [
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/aoe_event",
+   "type": "prepared-real",
+   "description": "10 event-type Open-AoE segments (5 original desktop-level + 5 high-motion, gyro p95 23-75 deg/s, selected by scripts/select_event_segments.py: event-verb filter 3-30% event fraction, motion floor, scene diversity cap) (verbs drop/throw/toss/break; event fraction 3.3-26.3%) prepared by scripts/prep_aoe.py --event-verbs: events.json carries the derived event intervals (note.event_verbs), gyro from trajectory differentiation, featmaps + 576-d pooled features for the sparse-event downstream check (GUIDE 2.3.7). Frames not kept on disk (regenerable from data/aoe_src).",
+   "size": "1.6G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py",
+    "scripts/extract_features_aoe.py",
+    "scripts/select_event_segments.py"
+   ]
+  },
+  {
+   "path": "data/aoe_motion_walk",
+   "type": "prepared-real",
+   "description": "4 walking-level high-motion Open-AoE segments (gyro p95 71-75 deg/s; field/kitchen/balcony/multi-room) prepared by scripts/prep_aoe.py and selected by scripts/select_walk_segments.py (motion floor >= 40 deg/s, scene diversity). Walking-level probe for the gyro-warp value hypothesis (runs/flow_eval_walk.json). Frames not kept on disk (regenerable via prep_aoe.py); featmaps/imu/events persist.",
+   "size": "0.9G",
+   "producers": [
+    "scripts/fetch_aoe.py",
+    "scripts/select_walk_segments.py",
+    "scripts/prep_aoe.py",
+    "scripts/extract_featmaps.py"
+   ]
+  },
+  {
+   "path": "data/cmci_ds_aoe_event",
+   "type": "derived-multimodal-dataset",
+   "description": "First dataset in the cmci-dataset-1 format (see dataset_format above; GUIDE.md §4.2). Built by scripts/build_dataset.py from data/aoe_event: 10 sections / 36,782 frames / 0.9 MB (25 B/frame). Residuals replayed with pred=rotation on the CACHED featmaps, so the stored `score` is bit-aligned with the published experiments. frames=none because data/aoe_event keeps no frames (disk budget; source videos gone) -- so the video and accel modalities are declared absent rather than faked. Per-section integrity markers come from cerebellum_cancel/integrity.py.",
+   "size": "0.9M",
+   "producers": [
+    "scripts/build_dataset.py"
+   ],
+   "known_limits": "No video/accel modality (source has no frames). The `weight` field's value is an unvalidated CLAIM (manifest and auto-generated README both mark it CLAIM, NOT ESTABLISHED) -- scripts/eval_weight_value.py has NOT been run. The integrity sentinel only does recording-level screening from a segment's own reference set and provably misses sparse faults (measured: 5 injected 40x spikes at 4000 frames all undetected because they land inside the 10% reference set); reliable sparse detection needs an independent healthy recording from the same scene/device."
+  },
+  {
+   "path": "data/real_imu",
+   "type": "real-capture (genuine IMU, no SLAM substitute)",
+   "description": "First sequence in this project with a REAL gyroscope: Galaxy S21 hand-held, from HF dataset simorautiainen/moving-in-messy-apartment-video-with-imu (1088x1088 square frames, ns timestamps, per-frame gyro/accel from the phone IMU), prepared by scripts/prep_real_imu.py. Calibration is measured, not documented: unit=rad/s (Android convention), yaw<-raw[0] / pitch<-raw[1], FOV~36 deg, f_map=42.67 on the 28-wide grid, copy quality r=+0.958 / R^2=0.87 against DIS flow. Raw session zip kept at data/real_imu_raw/ (~1.3 GB, regenerable by the curl in MEMORY_FORMAT §8). NOTE: this is also the only local sequence with real frames on disk (data/real_imu/val/seq_000/frames, 500 PNGs) plus accel.npy -- so it is the reference material for exercising the cmci-dataset-1 video+accel path (build_dataset.py --frames jpeg), which was verified end-to-end on it (400 frames, video+gyro+accel, 15831 B/frame).",
+   "size": "~0.5G (prepared) + 1.3G (raw zip)",
+   "source": "https://hf-mirror.com/datasets/simorautiainen/moving-in-messy-apartment-video-with-imu",
+   "producers": [
+    "scripts/prep_real_imu.py"
+   ]
+  }
+ ],
+ "results": [
+  {
+   "path": "runs/resolution_report.md",
+   "producer": "scripts/run_repeat_eval.py",
+   "note": "10x repeat-measurement protocol for the resolution axis (machine-readable numbers in runs/resolution_bench10x.json). Quality metrics re-run once per size and verified EXACT (max diff 0.0) against the recorded sweep; latency bench repeated 10x per size.",
+   "headline": "Quality is bit-exact across re-runs at all three input sizes (deterministic pipeline). Latency 10-run distributions: gyro shift 0.032/0.063/0.089 ms (224/336/448), DIS 3.83+-0.04/4.28+-0.43/4.34+-0.17 ms, backbone fwd ~1.0-1.2 ms (+-30%), full flow step 4.5-5.7 ms."
+  },
+  {
+   "path": "runs/flow_eval_res224.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 224 px input (40 train + 25 val seqs); part of the resolution series, see runs/flow_eval_res336/448.json",
+   "headline": "synthetic rig @224px (f_map 24.25): val calm residual naive 0.221 / gyro 0.130 / flow 0.107; gyro shift 0.032 ms, DIS 3.86 ms per frame."
+  },
+  {
+   "path": "runs/flow_eval_res336.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 336 px (f_map 36.38). backbone_fwd_ms re-measured standalone after fixing bench() to honor --size (bench_note inside the JSON).",
+   "headline": "synthetic rig @336px: val calm residual naive 0.187 / gyro 0.089 / flow 0.069 (-52% gyro gain); gyro shift 0.061 ms, DIS 4.20 ms per frame."
+  },
+  {
+   "path": "runs/flow_eval_res448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "resolution-axis run at 448 px (f_map 48.50). backbone_fwd_ms re-measured standalone (bench_note inside the JSON). At 448 px the gated trigger froze to 0 clips on all 5 checked val seqs; winsorized robust stats fired on all 5 (val seq_000..004, checked in the same session).",
+   "headline": "synthetic rig @448px: val calm residual naive 0.169 / gyro 0.072 / flow 0.052 (-58% gyro gain, monotone in resolution, not saturated); gyro shift 0.087 ms, DIS 4.35 ms per frame; flow/gyro gap narrows 0.82 -> 0.73."
+  },
+  {
+   "path": "runs/flow_eval.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "overwritten on every run; the runs referenced from docs are backed up as separate files: flow_eval_motion.json (real high-motion 224px), flow_eval_motion448.json (same pair at 448px), flow_eval_synth448.json (synthetic 448px), flow_eval_aoe9.json (9 desk clips, rebuilt from log).",
+   "headline": "current content: aoe_motion_448 --n-train 0 --n-val 2 --robust. Calm residual naive 0.0535 / gyro 0.0614 (still hurts, +15%) / flow 0.0684 (flips per-sequence: 0.086 hallway, 0.051 warehouse). The synthetic design rule 'finer features turn the gyro warp positive' does NOT transfer to real high-motion -- unmodeled translation/parallax dominates, not estimator error."
+  },
+  {
+   "path": "runs/flow_eval_aoe9.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "rebuilt from logged per-seq output of the 27ed74d n=9 run (see runs/flow_eval.json note)",
+   "headline": "AoE robust n=9: gyro clips stored 1.2-13.1% (median 9.2%), evRec 0.14-0.79 (median 0.46); gated stats (naive/flow) fire ~zero clips except seq_004 flow hallucination; gyro-warp calm residual ~= naive everywhere."
+  },
+  {
+   "path": "runs/downstream_results.json",
+   "producer": "scripts/train_downstream.py",
+   "note": "synthetic rig, logistic head on frozen featmaps, clip-based training",
+   "headline": "cerebellum clips: 3.4% stored, val AP 0.298, evRec@10 0.96 — beats uniform at 4x bytes (51% stored, AP 0.145) and beats oracle-adaptive on event recall. MLP head: measured negative (in README)."
+  },
+  {
+   "path": "runs/detection_synth_results.json",
+   "producer": "scripts/train_detection_synth.py",
+   "note": "detection-grade downstream on the synthetic rig (roadmap item 1): CenterNet-style heatmap head on frozen featmaps, VOC-style detection AP vs exact bbox GT from make_dataset.py, 20 seeds. Diagnosis (no rig bug; frozen-feature bottleneck): scripts/diag_detection_rig.py, scripts/diag_upper_bound.py, runs/diag_*.png.",
+   "headline": "NEGATIVE: cerebellum (3.4% stored) detAP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003 — all noise-level, 1-sigma overlapping. Perfect-prediction eval gives AP=1.0 (regression test), so the null is the bottleneck: MobileNetV3 features[:3] does not encode the flat blobs (full-data upper bound: train AP 0.56 / val 0.003; in-distribution train-on-val ceiling 0.415)."
+  },
+  {
+   "path": "runs/acquisition_demo.json",
+   "producer": "scripts/demo_acquisition.py",
+   "note": "protocol-layer demo (roadmap item 3): AcquisitionLayer driving real webcam capture (1950 frames, robust stats), residual heatmap overlay at runs/acquisition_demo_peak.png.",
+   "headline": "keep 6 clips, frame-level storage 14.4%, surprise peak-frame residual heatmap confirms hair-motion region; robust stat profile consistent with the 22-segment cross-scene conclusion."
+  },
+  {
+   "path": "runs/trigger_scan_s8.json",
+   "producer": "scripts/run_trigger_scan_s8.py",
+   "note": "backbone-replacement closure (roadmap item 2): same-protocol 40-train-segment trigger scan, DINOv1 ViT-S/8 (28x28 native grid) vs MobileNetV3. S/8 features extracted online, nothing persisted. Diagnosis scripts: scripts/diag_dino_trigger*.py.",
+   "headline": "NEGATIVE: S/8 fires 3/40 segments vs MNV3 11/40. Patch tokens have sufficient event discrimination (ev99 0.27 vs 0.23) but insufficient persistence (z_ema peaks stall below gate 6). Closes the backbone route: DINOv2 S/14 unfixable in-protocol (per-channel std is identity in the residual pipeline), DINOv2 S/8 weights delisted by Meta."
+  },
+  {
+   "path": "runs/downstream_dino.json",
+   "producer": "scripts/train_downstream.py --featmaps featmaps_dino.npy",
+   "note": "DINOv2 S/14 frame-level comparison, 20-seed protocol as runs/downstream_results.json. cerebellum/oracle rows degenerate (0 stored frames — S/14 adaptive trigger fires zero clips).",
+   "headline": "Only uniform rows informative: 5.2% stored / AP 0.196 / evRec@10 0.79 (below published MNV3 cerebellum 0.298). Uniform budgets 0.5x-4x collapse to identical 1240 frames: pre-existing zero-budget floor when the cerebellum mask is empty (also affects published MNV3 rows; fix pending maintainer decision)."
+  },
+  {
+   "path": "runs/detection_synth_dino_results.json",
+   "producer": "scripts/train_detection_synth.py --featmaps featmaps_dino.npy",
+   "note": "DINOv2 S/14 detection-level grid, 20 seeds. cerebellum/oracle 0 frames stored; uniform rows detAP NaN (all-zero-peak seeds expose a pre-existing eval fragility: detection_ap returns NaN with no peaks, nanmean over all-NaN).",
+   "headline": "No informative comparison: cerebellum/oracle degenerate at 0 frames, uniform NaN. Kept as raw archive alongside runs/detection_synth_results.json (MNV3 negative)."
+  },
+  {
+   "path": "runs/arbiter_eval.json",
+   "producer": "scripts/run_arbiter_eval.py",
+   "note": "last run: data/aoe_motion --n-val 2 --robust. The n=9 desk-clip run was overwritten and rebuilt from its logged aggregate output as runs/arbiter_eval_aoe9.json.",
+   "headline": "aoe_motion robust: seq_000 130 runs, 14 vetoes, runs-level stored 0.92->0.62 at precision 1.00 (evRec 1.00->0.82); seq_001 0 vetoes; amortized flow 0.58 ms/frame. AoE n=9 desk numbers: 140 runs/seq, stored 0.89->0.72, evRec 1.00->0.94 (runs/arbiter_eval_aoe9.json)."
+  },
+  {
+   "path": "runs/arbiter_eval_aoe9.json",
+   "producer": "scripts/run_arbiter_eval.py",
+   "note": "rebuilt from logged aggregate output of the 27ed74d n=9 run (see runs/arbiter_eval.json note)",
+   "headline": "AoE robust n=9: 140 candidate runs/seq, cascade vetoes 8-31%, runs-level stored 0.89->0.72 at precision 0.994, evRec 1.00->0.94; clips-level stored 0.079->0.206, evRec 0.49->0.55; amortized flow 0.89 ms/frame."
+  },
+  {
+   "path": "runs/downstream_clips.json",
+   "producer": "scripts/train_downstream.py",
+   "note": "per-clip selection records for the downstream comparison"
+  },
+  {
+   "path": "runs/raft_eval_data_dataset_val.json",
+   "producer": "scripts/run_raft_eval.py",
+   "note": "RAFT (ECCV 2020, raft-things) plugged into the same warp path as DIS, synthetic val first 5 seqs.",
+   "headline": "calm residual naive 0.2210 / gyro 0.1290 / DIS 0.1056 / RAFT 0.1054 (tie); latency DIS 5.9 ms vs RAFT 134 ms per frame. The flow ceiling is estimator-independent."
+  },
+  {
+   "path": "runs/raft_eval_data_aoe_motion_val.json",
+   "producer": "scripts/run_raft_eval.py",
+   "note": "same, real high-motion pair (data/aoe_motion, robust stats).",
+   "headline": "calm residual naive 0.0801 / gyro 0.0901 / DIS 0.0522 / RAFT 0.0544 (RAFT marginally worse); latency DIS 7.4 ms vs RAFT 138 ms."
+  },
+  {
+   "path": "runs/portable_check.json",
+   "producer": "scripts/run_portable_check.py",
+   "note": "CPU vs Apple Silicon MPS on data/dataset/val/seq_000 (32 frames): feature extraction and downstream gyro rollout compared across devices.",
+   "headline": "feature max rel diff 2e-6, gyro calm residual diff 3.7e-9 (numerically device-portable); backbone fwd 1.76 ms CPU vs 1.06 ms MPS (1.7x)."
+  },
+  {
+   "path": "runs/flow_eval_motion448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "448px resolution cross-check on the real high-motion pair (data/aoe_motion_448: frames symlinked at 448, featmaps re-extracted, f_map doubled to 38.33).",
+   "headline": "calm residual naive 0.0535 / gyro 0.0614 (warp still hurts) / flow 0.0684 (per-seq 0.0861/0.0507). Design rule from the synthetic sweep does not transfer to real data."
+  },
+  {
+   "path": "runs/flow_eval_synth448.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "backup of the flow_eval.json state before the 448px real cross (synthetic rig at 448px input).",
+   "headline": "synthetic 448px quality: train naive 0.0750/gyro 0.0453/flow 0.0336, val 0.1694/0.0717/0.0523 (gyro gain -58%, the top of the resolution sweep)."
+  },
+  {
+   "path": "runs/trans_eval_data_aoe_motion_val.json",
+   "producer": "scripts/run_trans_eval.py",
+   "note": "translation-term evaluation on the real high-motion pair (rotation-only vs rotation+constant-depth translation vs DIS). prep_aoe.py exports camera-frame translation velocity (SLAM trajectory) + a per-segment 1/Z scale calibrated against DIS flow.",
+   "headline": "NEGATIVE: constant-depth uniform translation warp hurts (calm residual gyro 0.0901 -> gyro+trans 0.0938, both seqs). Real scenes are depth-structured; the model class is wrong, calibration cannot fix it."
+  },
+  {
+   "path": "runs/downstream_aoe_results.json",
+   "producer": "scripts/train_downstream_aoe.py",
+   "note": "real-data downstream value rerun on Open-AoE (scripts/extract_features_aoe.py streams 576-d pooled features from the source mp4; scripts/make_verb_labels.py builds 7-class frame-level verb labels — the binary active-manipulation mask is degenerate on 8/9 segments). 6 segments train / 3 val, robust trigger, one-vs-rest logistic heads. SUPERSEDED by runs/downstream_aoe_cv.json (12-seg 3-fold x 35 seed = 105 runs/method).",
+   "headline": "NEGATIVE / no transfer (single-split legacy run): cerebellum stored 7.1% val mAP 0.197 vs uniform(0.5x) 0.209, oracle 0.203. Use runs/downstream_aoe_cv.json for the error-barred conclusion."
+  },
+  {
+   "path": "runs/downstream_aoe_cv.json",
+   "producer": "scripts/run_downstream_aoe_cv.py",
+   "note": "Robust version of the real-data downstream value experiment: 12 Open-AoE segments, 3-fold cross-segment CV x 35 seeds = 105 runs per method, 9 verb classes (fold/grasp/hold/insert/lift/set_down/thread/unfold/wipe) one-vs-rest logistic heads. Rebuilds data/aoe/verbs.json over the 12 segments.",
+   "headline": "NEGATIVE with stats: cerebellum stored 16.0% mAP 0.162+-0.077 ivRec 0.67+-0.12 vs uniform(1x) 0.173+-0.082, oracle (13.2%) 0.164+-0.088 — all mAP within 1 sigma. 'No transfer' is now a statistical conclusion, not a single-split observation."
+  },
+  {
+   "path": "runs/downstream_event_results.json",
+   "producer": "scripts/train_downstream_event.py",
+   "note": "Sparse physical event regime check (GUIDE 2.3.7): 10 Open-AoE segments with drop/throw/toss/break verbs (5 original desktop-level + 5 high-motion gyro p95 23-75 deg/s selected by scripts/select_event_segments.py), binary event-frame detection from atomic-action intervals, leave-one-segment-out x 25 seeds = 250 runs per method. 5-segment version was overwritten by this run.",
+   "headline": "NEGATIVE, pinned: cerebellum (23.4% stored) AP 0.108+-0.094 ~= uniform(1x) (23.6%) 0.104+-0.084; oracle (7.9%) best at 0.144+-0.128 but margin shrank vs the 5-seg run (0.204) and evRec no longer leads — kinetic unpredictability as an importance signal is confirmed ineffective on real egocentric data (10 segs, 250 runs, desktop-to-high-motion); the translation-check (runs/trans_eval_data_aoe_event_val.json) closed the escape route: residual noise is world motion (hands), GT translation explains nothing."
+  },
+  {
+   "path": "runs/flow_eval_event.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "Quality + latency baseline on the 5 event segments (data/aoe_event), robust trigger. Backup of the flow_eval.json output of that run.",
+   "headline": "Event-seg latency baseline: DIS 8.18 ms, gyro shift 0.033 ms, pixel core 0.184 ms, backbone fwd 1.06 ms, full flow step 6.40 ms per frame."
+  },
+  {
+   "path": "runs/trans_eval_data_aoe_event_val.json",
+   "producer": "scripts/run_trans_eval_event.py",
+   "note": "Event-segment translation check (roadmap item 1): GT camera-frame translation from the AM trajectory is exported in data/aoe_event imu.csv; rotation vs rotation+constant-depth translation warp on featmaps, with frame residual decomposed inside/outside annotated event intervals. No frames needed.",
+   "headline": "NEGATIVE + diagnosis: gyro_trans is worse than gyro on every segment, inside AND outside event intervals (mean calm 0.0679 -> 0.0704); residual inside events ~= outside (0.197 vs 0.193). The event-regime noise is WORLD motion (hands), not egomotion — translation modeling cannot fix 2.3.7, and the flow-arbiter veto experiment (roadmap item 2) is absorbed: flow can only veto camera-motion-explainable candidates, and GT translation already fails to explain the residual."
+  },
+  {
+   "path": "runs/downstream_event_zreadout.json",
+   "producer": "scripts/train_downstream_event_zreadout.py",
+   "note": "Readout-upgrade test (roadmap item 1): same 10-seg LOO x 25 seeds = 250 runs/cell protocol as downstream_event_results, but the downstream input is a spatial readout of the z-map instead of backbone features. Readouts: zamp (1-d global mean of channel-summed z^2), zpyr (21-d log1p spatial pyramid 1+2x2+4x4), feat (576-d baseline), feat+zpyr (concat). Methods: cerebellum / uniform(1x) / oracle.",
+   "headline": "NEGATIVE, decisive: zamp AP is bit-identical across all three storage methods (0.129+-0.098) -- logistic learns zero weights on a signal-free feature and AP collapses to the val event-rate constant; zpyr ~= zamp (spatial pattern adds nothing); feat+zpyr ~= feat (no complementarity); high z-readout evRec (0.84-0.87) is a budget artifact. The z-map carries no event-discriminative information in amplitude OR spatial pattern -- the last value exit inside the motion-prediction framing is closed."
+  },
+  {
+   "path": "runs/flow_eval_walk.json",
+   "producer": "scripts/run_flow_eval.py",
+   "note": "Walking-level probe (roadmap item 2): 4 high-motion large-scene Open-AoE segments (data/aoe_motion_walk, selected by scripts/select_walk_segments.py, gyro p95 71-75 deg/s: field/kitchen/balcony/multi-room). Quality (robust, calm residual) + latency. Backup of the flow_eval.json output of that run; frames deleted after eval (featmaps/imu/events kept, regenerable).",
+   "headline": "NEGATIVE for gyro value: gyro warp is worse than naive on 3/4 walking-level segs (mean calm 0.1429 -> 0.1582, +11%; per-seq naive/gyro/flow: 0.2105/0.2260/0.1366, 0.1187/0.1445/0.0697, 0.1712/0.1687/0.1320, 0.0713/0.0935/0.0830). DIS flow still wins quality everywhere (mean 0.105, -26% vs naive) at 8.5 ms vs 0.033 ms gyro shift. 'Higher motion -> corollary discharge pays off' FALSIFIED: real-data residual-quality advantage is a synthetic-regime property; walking-level damage is dominated by model-class errors (translation/parallax/rolling shutter) and SLAM-copy degradation."
+  },
+  {
+   "path": "runs/record_format_bench.json",
+   "producer": "scripts/bench_record_format.py",
+   "note": "Residual record format v2 (MEMORY_FORMAT.md; cerebellum_cancel/record.py): self-describing container, int8+deadband+zlib quantization, stats sidecar (mu/var/F_prev) for warm start, power-loss recovery. Measured on 6 Open-AoE event segments (data/aoe_event/val, n=2000 frames each). Byte accounting is payload-only (one-time header/footer/sidecar excluded). Three z_policies: all / keep_only (default) / none.",
+   "headline": "Per-frame payload: f32 z-map 75264 B, f16 z-map 37632 B (the featmaps.npy convention) -> format all 10271 B (3.7x), keep_only 3386 B (9.0% of f16), none 13.0 B. Ablations: f16+zlib alone 35163 B (entropy coding buys almost nothing on f16 tails), int8 without zlib 18835 B -> the gain is quantization, not zlib. Decision fidelity: replayed trigger clips are bit-identical on 6/6 segments via the lossless float64 score; re-deriving the score from the lossy int8 z-map does NOT reproduce them (deliberate - the z-map is a diagnostic payload, not the decision record). Write cost 0.085 ms/frame (keep_only). Warm start: sidecar (220.5 KiB/sequence) makes 'resume after interruption' equal 'uninterrupted run' exactly (max rel diff 0.00e+00, 6/6); cold start's first frame reads 0 surprise, warm start's reads >0 - the engineering fix for the GUIDE 2.3.5 known limitation (statistics need time to converge, earliest events are missed)."
+  },
+  {
+   "path": "runs/cascade_scan.json",
+   "producer": "scripts/run_cascade_scan.py",
+   "note": "Layer-count line (CascadeCancel, cerebellum_cancel/cascade.py): the DOP paper's 'linear optical layers but more layers still improve performance' translated into a falsifiable engineering question - does stacking a second predictor on the first-order warp's residual help? Two layer kinds: temporal (slow per-cell level estimate on the residual = granule-cell temporal basis / negative image) and spatial (center-surround decorrelation = ON/OFF antagonistic channels). Judged on RAW residual (not z: z is normalized, a successful predictor shrinks residual and scale together and z stays O(1)) plus event contrast (event residual / quiet residual) - falling residual with flat contrast means mere gain reduction, not prediction. 10 Open-AoE event segments, plus a slow_ema x gate_k grid including the gate-off control.",
+   "headline": "Layer-count hypothesis FALSIFIED in this project: temporal is near-neutral (quiet residual 1.004x L1 at L2, 1.013x at L3, 1.022x at L4; contrast wins 2/8 at <0.3% margin) and spatial degrades monotonically (1.024x / 1.426x / 2.259x). The hyperparameter sweep is 8/8 negative (slow_ema in {0.02,0.1,0.3,0.6} x gate_k in {4.0,0.0}, best quiet 0.2183 - all >= L1, contrast wins at most 2/4). Cost is +0.045 ms/frame per layer (+41% over L1's 0.107). Mechanism: the residual's lag-1 correlation (measured 0.16-0.40) is the EVENT's own temporal continuation - predicting it away means learning away the thing being detected, and the equilibrium gate correctly blocks that, leaving layer 2 nothing to learn (hence gate=0 ~ gate=4: the gate is not the bottleneck). Spatial assumes events are local contrast, but real events have spatial extent, so subtracting the local mean hollows out the event center. Consistent with the earlier flat negative results (constant-depth translation, translation modelling): what remains in the residual is world motion; the new information here is that even RE-COMBINING layers (as opposed to adding free parameters) does not help."
+  },
+  {
+   "path": "runs/real_imu_eval.json",
+   "producer": "scripts/run_real_imu_eval.py",
+   "note": "Genuine-IMU residual comparison (GUIDE 4.2 boundary 5 closure): naive / gyro+tan-approximation-shift (the pipeline's original warp) / gyro+full-rotation-matrix homography (incl. roll) / DIS flow, on a hand-held Galaxy S21 session. Primary metric is method-INDEPENDENT full-frame raw residual; the previously published 'calm residual' selects frames by each method's own surprise (naive picks 7.1% of frames, rotation 8.4%), which is circular selection and not usable across methods - it is still reported for continuity. Requires CancelConfig(source=...) to pick the dataset convention; this dataset is signs=(-1,-1,-1) WITH cv2.WARP_INVERSE_MAP and lag=1 (MEMORY_FORMAT 8.7 - signs and that flag are a joint convention).",
+   "headline": "Same genuine gyro, different warp implementation, OPPOSITE conclusion. r=+0.958 / R^2=0.87 copy quality (best ever in this project - Open-AoE SLAM-substitute gyro calibrated at only 0.18-0.93). The pipeline's original tan-approximation shift warp HURTS (about 1.31-1.36x) while the full rotation-matrix homography HELPS (about 0.84-0.88x); DIS flow reaches about 0.61-0.66x but at ~30x the cost. Per-pixel control on the 100 highest-rotation frame pairs is starker: constant-translation approximation 1.433x vs full rotation 0.614x. Two independently verifiable model deficiencies: (1) roll was never modelled at all (p95 45 deg/s here, ~1 cell of shift at the map edge); (2) the constant-(dx,dy) approximation of a rotation field is only valid near the centre - yaw/pitch give linear/quadratic displacement fields whose approximation error grows with distance from centre and, measured, exceeded the compensation gain. REPRODUCIBILITY CAVEAT: the absolute residuals of the original run (naive 0.3704, shift 1.308x, rotation 0.876x) can NO LONGER be reproduced - a re-run gives naive 0.3945, shift 1.364x, rotation 0.835x. naive ALSO changed (+6.5%) and naive depends on none of the code that changed (no f_map, no warp), so the shift comes from the frame-reading chain. Ruled out: frame contents (md5 identical), Resize size (224/256/192/160), grayscale input, CPU vs MPS, frame count (350-500), f_map version (42.674 and 43.13). NOT located. What IS stable is magnitude and direction: method ordering, signs and relative ratios agree across both readings (shift ~1.3-1.4x, rotation ~0.84-0.88x, flow ~0.61-0.66x) - SO QUOTE RATIOS, NOT ABSOLUTE RESIDUALS. Implementation: cerebellum_cancel/rotwarp.py + CancelConfig.pred='rotation' (default stays 'shift' so no published number changes). Boundaries: single session/device (17.9 s, indoor hand-held) - a data point, not a distribution. SUPERSEDED IN PART by runs/rotwarp_aoe.json: the AoE cross-check shows the significance of the gain there depends on the evaluation window, and - measured by exhaustive per-frame oracle - gyro realizes only ~1/3 of the available gain because the model has no translation term. So the cause of the old AoE negative is re-attributed: not SLAM-degraded copy quality, and not 'the data moves too little' either, but an incomplete motion model."
+  },
+  {
+   "path": "runs/rotwarp_aoe.json",
+   "producer": "scripts/run_rotwarp_aoe.py",
+   "note": "Cross-validation of the rotation warp on Open-AoE (2 aoe_motion + 10 aoe_event segments, cached featmaps) - BUT note data/aoe_event/val/seq_007 and data/aoe_motion/val/seq_001 have IDENTICAL md5 for featmaps.npy and imu.csv, so this is 11 independent segments, not 12. Same rotation implementation and dataset-correct convention as runs/real_imu_eval.json. Conventions are JOINT (MEMORY_FORMAT 8.7): signs=(-1,+1,+1) AND lag=0 AND cv2.WARP_INVERSE_MAP - omitting the flag reverses the warp and flips the conclusion. Compared against the pre-existing scripts/analyze_negatives.py (runs/negative_followups.json) which reports +4.65% / 12-of-12 on the same data.",
+   "headline": "DISAGREEMENT WITH THE PRE-EXISTING ANALYSIS RESOLVED: the gap was the EVALUATION WINDOW, not the implementation. After aligning implementations bit-for-bit (per-segment deviation 0.32pp; my reproduction of analyze_negatives' own protocol gives +4.63% vs its +4.65%), the same implementation on the same data gives: (A) whole-sequence first 600 frames +2.06%, 9/12, p=0.146; (B) second half of first 1500 frames +4.55%, 11/12, p=0.006; (C) B plus per-segment sign calibration +4.63%, 11/12. So A->B (the window) moves 2.5pp and takes p from 0.146 to 0.006, while B->C (sign calibration) moves 0.08pp - the significance of this 'gain' is decided ENTIRELY by which frames you evaluate on. Quote the window whenever you quote the number. Mechanism, measured WITHOUT any estimator: scripts/oracle_aoe_shift.py exhaustively searches the best per-frame pure translation (oracle). Result: gyro DOES have explanatory power on this data (oracle-shift vs gyro-predicted-shift correlation +0.43..+0.45 on the yaw axis, consistent across all three time windows) - the earlier 'correlation ~0 or negative' from phase correlation was ESTIMATOR NOISE at 0.2px displacements on a 28x28 map. And gyro realizes only about 1/3 of the available gain (oracle bound rises +4.79%/+5.22%/+6.20% across windows while gyro manages +1.4..2.7%), so the bottleneck is the MODEL (it models no translation term - hand-held walking translation is unmodelled), NOT 'the data moves too little'. scripts/control_aoe_gain.py rules out the 'it is just interpolation smoothing' hypothesis: shuffling gyro in time gives -6.26%, flipping all axis signs gives -6.53%, whereas the correct direction gives +4.46% - the 11pp forward/backward ASYMMETRY is itself proof that direction and timing are systematically right, and pure Gaussian blur (no IMU at all) reaches at best +0.06%. Three real convention bugs found here (MEMORY_FORMAT 8.7): (1) WARP_INVERSE_MAP was missing, so the prediction was warped BACKWARDS - this turns a gain into a loss and is invisible in residual numbers alone (it misled two rounds of debugging); (2) signs and that flag are a JOINT convention ((-s, with flag) == (+s, without)), so adding the flag required flipping every dataset's stored signs - real IMU (+,+,+) -> (-,-,-); writing (+,+,+) with the flag gives 1.289 instead of 0.835; (3) the two prep scripts calibrate to opposite sign objectives. Separately: the gyro pairing lag is dataset-dependent (real IMU lag=1, AoE lag=0) and must not be set globally."
+  },
+  {
+   "path": "runs/aoe_gain_control.json",
+   "producer": "scripts/control_aoe_gain.py",
+   "note": "Control experiment isolating what the AoE gain actually comes from. Same window and metric throughout; compares the rotation warp against a time-shuffled gyro (amplitude distribution kept, temporal correspondence destroyed), a sign-flipped rotation (wrong direction), and pure Gaussian blur (no IMU at all).",
+   "headline": "The AoE gain is REAL MOTION COMPENSATION, not an interpolation-smoothing artefact. Correct direction +4.46% (10/11), time-shuffled gyro -6.26% (1/11), all-signs-flipped -6.53% (1/11), pure Gaussian blur +0.06% at best (-44.06% at sigma 0.5). The decisive argument is the ASYMMETRY: if the warp were unrelated to content, the forward and backward warp would produce IDENTICAL residuals, but they differ by 11 percentage points - which is itself proof that direction and temporal alignment are systematically correct. If the gain had been smoothing, shuffled/sign-flipped/blur would have reproduced it; none do. This closes the hypothesis raised when the window analysis showed the gain depends on which frames are evaluated."
+  },
+  {
+   "path": "runs/aoe_oracle_shift.json",
+   "producer": "scripts/oracle_aoe_shift.py",
+   "note": "Estimator-free referee for 'does the gyro explain anything on AoE'. For each frame it exhaustively searches the content translation that minimises the interior residual (the oracle bound for a pure-translation model) and correlates that with the shift the gyro predicts - no phase correlation, no flow, no learned model. Reported per 500-frame window, together with what a pure-translation model could achieve versus what the rotation warp does achieve.",
+   "headline": "gyro DOES explain AoE frame-to-frame motion, and the MODEL, not the data, is the bottleneck. Oracle-shift vs gyro-predicted-shift correlation is +0.454 / +0.432 / +0.447 on the yaw axis across the three time windows - consistent, positive, and directly contradicting the earlier 'correlation ~0 or negative' obtained via phase correlation (that was estimator noise at 0.2px displacements on a 28x28 feature map). Moreover the oracle bound RISES across windows (+4.79% -> +5.22% -> +6.20%) while the gyro rotation warp realises only +1.4..2.7%, i.e. about ONE THIRD of what is available. So the previously published mechanism ('AoE moves too little for the rotation model's extra expressiveness to pay off') is superseded: the real gap is that the model uses only the three angular rates and models no translation term (hand-held walking translation), which is exactly what CancelConfig.trans_scale is reserved for (needs a 1/Z calibration; not done)."
+  },
+  {
+   "path": "runs/aoe_window_profile.json",
+   "producer": "scripts/diag_aoe_window.py",
+   "note": "Per-250-frame profile of the rotation gain on AoE, together with a gyro-reliability proxy (correlation between gyro-predicted shift and the phase-correlation measured shift) computed per block. Produced to explain why the same implementation reports +2.06% over the whole sequence but +4.55% on the second half.",
+   "headline": "The gain is NOT explained by motion amplitude: correlating per-block gain against per-block displacement gives Pearson r=-0.07 (p=0.72), and binning by displacement shows no trend (+2.50% / +3.68% / +2.59% for low/mid/high thirds). What the profile DID surface is that AoE per-frame content displacement is only 0.05-0.4px, which is what made the phase-correlation reliability proxy unusable - its noise floor is about 0.2px there. That unreliable proxy is what motivated building the exhaustive oracle in scripts/oracle_aoe_shift.py, which then gave the real answer. Kept as the record of a measurement that was rejected for good reason."
+  },
+  {
+   "path": "runs/axis_window_stability.json",
+   "producer": "scripts/check_axis_window_stability.py",
+   "note": "Stability audit of the rotation-axis ablation under a 2x2 grid of evaluation window (held-out second half vs whole segment) and metric scope (interior feature-map cells vs all cells including the border), on the de-duplicated 11-segment pool. Per-axis signs are fitted on the first half and frozen, so only the window and the scope vary. Written because a residual-magnitude gain can depend on where and how it is measured, and the headline axis ordering of runs/negative_followups.json was originally reported under a single window and a single scope.",
+   "headline": "The axis ordering the paper's ablation rests on is a property of the data, not of the measurement -- but only after splitting by motion level. At walking level (gyro p95 >= 60 deg/s, n=6 after de-duplication) roll ALONE beats yaw+pitch combined under BOTH metric scopes and both windows: interior +3.90% vs +2.96%, full frame +3.54% vs +0.41% (there the gap widens to 8x, because excluding the border flatters models that do not have to synthesise content at the frame edge). At desk/mid level (n=5) the ordering reverses under both scopes (+1.28% vs +3.16% interior), which is the motion-level dependence the table measures. The POOLED ordering, by contrast, is NOT scope-stable -- pooling everything and excluding the border puts yaw+pitch above roll, while including the border reverses it -- which is exactly why the motion-level split is the right way to state the result and why this audit is reported rather than only the headline number. Separately: the full three-axis homography is the only model that is positive under all four combinations (+2.49% to +5.53%), so it is the model to default to rather than a per-regime choice. This audit also surfaced a DUPLICATE segment: data/aoe_event/val/seq_007 and data/aoe_motion/val/seq_001 are byte-identical in both featmaps.npy and imu.csv (same MD5), so the '12 segments' of the AoE cross-validation are 11 distinct recordings; de-duplicating moves means only in the second decimal."
+  },
+  {
+   "path": "runs/label_audit_probe.json",
+   "producer": "scripts/probe_label_audit.py",
+   "note": "Tail-vs-aggregate test: does the residual agree with the annotations in the TOP of its distribution (top-1%/5%/10% most surprising frames), rather than in the mean? The published negative ('the residual map carries no event signal') is an AGGREGATE statement (AUC, interval means) and does not by itself settle the tail question, which is what a 'find the rare mislabeled frame' use case would need. Also reports, for the surprise-selected frames that fall outside annotations, the distance to the nearest annotation boundary -- separating 'annotation edge blur' from 'genuine omission'.",
+   "headline": "NEGATIVE, and stronger than the aggregate result: the residual has NO systematic relationship with annotation membership in the tail either. Enrichment over the base rate (88.0% of frames are outside annotations) is 1.032x at top-1%, 1.001x at top-5%, 0.989x at top-10% -- i.e. indistinguishable from random at every budget. The hypothesis that the tail might behave differently from the mean is falsified, so the earlier aggregate negative generalises to the tail. This rules out one specific reading of the 'residual finds bad labels' idea, but NOT the whole idea -- see runs/label_audit_planted.json, because this test has no ground truth: it knows which frames are outside annotations, not which are wrong."
+  },
+  {
+   "path": "runs/label_audit_planted.json",
+   "producer": "scripts/audit_planted_labels.py",
+   "note": "Planted-error audit: inject KNOWN annotation errors and measure whether the residual ranks the affected frames first (lift = precision@k / (k/N)). This is the only way to answer 'can it find mistakes', because correlation-style tests have no ground truth. Four injection types spanning the two distinct classes of annotation error: temporal (boundary shift, dropped short interval, over-extended interval) and semantic (verb swap). The semantic case is an explicit NEGATIVE CONTROL -- it does not change any frame's interval membership, so the residual cannot possibly localise it, and if it scored highly the whole harness would be leaking.",
+   "headline": "LARGELY NEGATIVE for annotation QA: the residual localises only one of the three temporal error types, and weakly. barely_shift (boundary off by 2 frames) 0.00x -- no localisation at all; extend_far (interval stretched 3s) 0.53x -- worse than random; drop_short (dropped short interval) 1.78x -- the only positive, and modest. The negative control verb_swap scored 1.15x, confirming the harness is not leaking (which is what makes the rest of the table credible). Interpretation: the residual measures KINEMATIC PREDICTABILITY, while annotation errors are SEMANTIC/CONVENTIONAL, so the two are largely orthogonal by construction. Note this is a statement about annotation QA specifically, not about the residual's usefulness in general."
+  },
+  {
+   "path": "runs/label_audit_vs_loss.json",
+   "producer": "scripts/compare_residual_vs_loss.py",
+   "note": "Head-to-head against the mature data-cleaning baseline: a model's own training loss / confidence (confident learning, small-loss trick). Residual = label-INDEPENDENT; loss = label-DEPENDENT. CRITICAL methodological point: the first version trained the loss model on the CLEAN labels, which made it look excellent (86x) but is an invalid setting -- in real cleaning you only ever have the dirty labels. The reported baseline therefore retrains on the POLLUTED labels, which is the only honest comparison. Logistic regression is hand-written in numpy to avoid adding a sklearn dependency and to keep the baseline free of 'better optimiser' confounds.",
+   "headline": "The loss baseline WINS on annotation QA, but the two signals are nearly orthogonal and the residual has one real structural advantage. (1) barely_shift: loss 100.24x (retrained!) vs residual 0.00x -- any error expressible in the labels themselves can be fitted directly by the model, so use loss, not the residual. (2) drop_short: loss falls to 0.61x while the residual holds 1.38x -- retraining on dirty labels teaches the model the error, which is the known small-loss failure mode, and the residual (label-independent) does not suffer from it. (3) extend_far: loss 0.88x vs residual 0.46x -- both fail. Spearman correlation between the two signals is +0.028, i.e. essentially orthogonal -- so the residual is not a cheaper loss, it is a DIFFERENT SENSOR, which is the finding that motivated re-aiming the idea at data-integrity faults (runs/integrity_fault_probe.json). Union and weighted-mix of the two signals gave no stable gain."
+  },
+  {
+   "path": "runs/integrity_fault_probe.json",
+   "producer": "scripts/probe_integrity_faults.py",
+   "note": "Re-aimed at the problem the residual is actually suited for: DATA INTEGRITY faults (IMU-video causal chain broken) rather than annotation errors. Includes both segment-level faults (whole-segment IMU time shift, IMU gain error) and frame-level faults (IMU dropout, duplicated frame, IMU spike). The distinguishing property is that these are INVISIBLE to label-based cleaning tools: the annotations do not change, so loss/confidence does not move, while the residual reacts by construction.",
+   "headline": "PARTIAL POSITIVE: the residual reliably catches transients, but NOT sustained faults. imu_spike lift 10.92x with 10/10 segments above baseline -- reliable, and the only fault type that works out of the box. But imu_dropout 0.98x, frame_dup 0.09x, imu_segment_desync 0.99x, imu_scale 0.99x -- all undetected. imu_dropout being undetected is counter-intuitive (zeroed gyro degenerates the warp to identity, so the residual should rise) and triggered the follow-up chain that located the real bound -- see runs/diag_dropout_absorption.json and runs/diag_two_bounds.json. Interim reading: transient faults are detectable, sustained ones are bounded, and the bound had to be measured rather than assumed."
+  },
+  {
+   "path": "runs/diag_dropout_absorption.json",
+   "producer": "scripts/diag_dropout_absorption.py",
+   "note": "Diagnostic chain step 1: why is IMU dropout (a sustained fault) not detected? Prints per-frame residual, running sd and surprise side by side for both the robust and the gated configuration, injected vs clean, to distinguish the two candidate causes: (a) the raw signal never rose, or (b) the online statistics absorbed it.",
+   "headline": "Neither candidate -- and the real answer reframes the problem. The residual DOES rise (0.1177 before to 0.2019 during), but the CLEAN baseline for that same span is already 0.1932, so the rise carries no information. Mechanism: zeroing the gyro degenerates the predictor to plain frame differencing, and on AoE the rotation warp is worth only about 3-5% over naive -- so the residual increase from losing the IMU is bounded by the IMU's own marginal contribution, which here is near zero. The same holds for the gated configuration (0.1868 clean vs 0.1947 faulted). Consequence: 'IMU is broken' and 'IMU is useless here' are OBSERVATIONALLY INDISTINGUISHABLE on this data, and no algorithm change can separate them. This is an information bound, not a tuning problem."
+  },
+  {
+   "path": "runs/integrity_fault_realimu.json",
+   "producer": "scripts/probe_integrity_realimu.py",
+   "note": "Cross-check of the derived bound on the genuine-gyro session, where the IMU is worth much more (rotation warp 0.84x vs naive 0.98x on AoE). The prediction was that fault detection should therefore work here but not on AoE -- testing a mechanistic claim rather than just collecting another number. Same injection protocol; real-IMU segments have no human event annotations so only fault-vs-clean ratios are reported.",
+   "headline": "The prediction was FALSIFIED, and productively so. Segment-level IMU zeroing gave only 1.04x and desync 1.00x, local dropout 0.95x -- i.e. still undetected despite the IMU being worth 0.84x here. Only imu_spike worked again (5.59x). So 'detection is bounded by SEGMENT EVENT CONTENT, not by IMU VALUE' -- the segment's number of collision-like events (loose can lids) sets an IRREDUCIBLE residual floor, which dominates any sustained fault signal. This is a cleaner and more fundamental bound than the cross-dataset IMU-value story, and it is why the detection work is only worth doing on low-event-rate data. Recorded as a wrong prediction that redirected the search to the statistics (runs/diag_two_bounds.json)."
+  },
+  {
+   "path": "runs/diag_two_bounds.json",
+   "producer": "scripts/diag_two_bounds.py",
+   "note": "Diagnostic chain step 2, and the mechanistic core of the whole exploration: decompose fault detectability into TWO independent bounds and measure each. (1) SIGNAL bound = the raw-residual change, which is capped by the IMU's marginal contribution on that data -- data-determined, unfixable by algorithm. (2) ADAPTIVE bound = the online sd in surprise = |err|/sd absorbing the fault -- algorithm-determined and fixable. Measured by recomputing z-scores against a FROZEN baseline (first 120 frames) alongside the online surprise, so the two bounds can be separated on the same injection.",
+   "headline": "Both bounds located, and they bind on different data. AoE: raw 1.03x, online 1.02x, frozen 1.02x -- signal bound binds (no IMU value, so no detectability, period). Real-IMU session: raw 1.49x, online 1.43x, frozen 1.83x -- here the signal IS there, and the ADAPTIVE bound is what was eating it; a frozen reference baseline recovers 1.83x. Practical consequence: integrity monitoring should use a frozen reference z-score, not the self-adapting surprise, and it can only ever work on data where the IMU carries information. Methodological correction recorded here: earlier runs of this probe injected the fault BEFORE the statistics had converged, which made both datasets read about 1.0x and briefly suggested nothing was detectable at all; injection must happen after convergence."
+  },
+  {
+   "path": "runs/detectability_vs_span.json",
+   "producer": "scripts/probe_detectability_vs_span.py",
+   "note": "The decisive sweep for the 'find the rare 1% bad data' framing, and the resolution of an apparent contradiction between two earlier runs: whole-segment IMU zeroing read 1.04x (undetected) while a local 60-frame zeroing read 1.49x (detected) -- same data, same fault, same statistic, differing only in HOW MANY FRAMES the fault covers. Sweeps fault coverage from 1.2% to 100% and uses a self-calibrating per-recording decision rule (threshold = P99 of the surprise distribution OUTSIDE the fault span), which is what a real integrity check would do. Reported for both the online surprise and the frozen-reference z-score.",
+   "headline": "DECISIVE NEGATIVE ON THE 'FIND 1%' FRAMING: detection requires the fault to cover roughly 40% of the recording, two orders of magnitude away from the 1% target. On the genuine-gyro session (where the IMU carries real value) the detection rate is 0.00 at 1.2%, 2.5% and 5% coverage; 0.25 at 10%; 0.50 at 20%; and 1.00 only at 40%. On AoE it never exceeds 0.50 at any coverage. Two structural ceilings emerge, and both are visible in the same table. (1) There is a MINIMUM coverage: a small fault cannot be separated from the healthy distribution -- at 1.2% coverage the fault peak sits at 0.38x the healthy P99 threshold, i.e. BELOW the noise, and in fact quieter than the busiest normal frames. (2) There is a MAXIMUM coverage: at 80% and 100% the detector has no healthy reference left to calibrate against and correctly reports 'no reference' rather than a false verdict. So the usable window is a band (roughly 20-40% coverage), not a tail, and the detectability of a small anomaly is governed by the ratio of fault span to recording length rather than by algorithmic sensitivity. Combined with the signal bound of runs/diag_two_bounds.json, the honest capability statement is: this detects recording-scale integrity breakage (a cable, a clock, a mount), not rare 1% outliers."
+  },
+  {
+   "path": "runs/gate_operating_curve.json",
+   "producer": "scripts/run_gate_operating_curve.py",
+   "note": "Gating operating curve (inference-time role: CMCI as an always-on wake gate for a heavy downstream model). This asks a DIFFERENT question from every earlier downstream test: not 'does residual-selected data train a better model per stored byte' (2.3.6/2.3.7, negative) but 'at how low a wake rate does it capture events, and how fast does it wake'. Those decouple: a signal can carry no class-discriminative information yet still mark WHEN something happened. Both deployment semantics are measured separately because they have different cost models and different null hypotheses: WAKE semantics (heavy model runs only on triggered frames; frames may be scattered; null = random frame scatter) and CLIP semantics (the project's storage convention: pre/post roll + merge + min length; null = random 1 s bursts). Readouts per event: capture (any kept frame in the 0.5 s-padded window), capture_raw (strict - a kept frame while the event actually runs), onset_capture (woken within 0.5 s of onset), plus median latency. 10 Open-AoE event segments, 200 random draws per budget per segment, both warp models (shift = released default, rotation = measured better). No frames needed (featmaps + imu + events only).",
+   "headline": "NEGATIVE, and it kills the inference-time gating framing on this data. (1) Under CLIP semantics the gate does not beat uniform sampling at any budget: at 5% budget gate capture 0.014 vs uniform 0.000 and oracle 1.000; at 10% gate 0.100 vs uniform 0.464; at 20% gate 0.450 vs uniform 1.000. (2) Under WAKE semantics it LOSES TO RANDOM SCATTER, which is the fair control: at 2% budget gate capture 0.464 vs random 0.782 (random p95 1.000); at 5% gate 0.775 vs random 0.977; at 0.5% gate 0.136 vs random 0.282. The mechanism was then decomposed and both halves confirmed (runs/diag_gate_vs_random.json): (A) frame-level enrichment of high-score frames into event intervals has MEDIAN 0.673 at 2% budget and 0.897 at 10% - i.e. the score's top frames are AT OR BELOW chance inside annotated events (8 of 10 segments below 1.0 at 2%; only seq_008 reaches ~2.9); (B) a clustering penalty - the gate emits 8 runs (median run length 1.9 frames) where random scatter emits 21 at the same budget, and 'was any frame kept in this interval' favours spreading. Onset capture is 0.000 for the online triggers at every budget up to 2% (0.054 at 5%, 0.477 at 10%): at the budgets a gate would actually run at, it does not wake within 0.5 s of an event starting. Frame-level AUC of the score against the event intervals is 0.510 median (chance). This is consistent with 2.3.7's binary-detection result but strictly stronger: it shows the residual is uninformative about WHEN events occur, not merely about which frames are trainable.",
+   "supersedes_note": "See runs/diag_gate_lock.json for the trigger bug this experiment also surfaced."
+  },
+  {
+   "path": "runs/diag_gate_lock.json",
+   "producer": "scripts/diag_gate_lock.py",
+   "note": "Diagnosis of a real defect in AdaptiveTrigger, found while measuring per-segment storage on the 10 event segments. The released trigger normalises its score by a running mu/var, but that baseline is updated ONLY on frames that are outside a clip AND below the onset threshold. On dense-surprise segments the update never runs again after onset, so the normaliser freezes, z stays above the threshold forever, and the gate LATCHES OPEN. This is the same failure class as 2.3.3's gated-statistics freeze, one level up: 2.3.3 fixed the freeze inside FeatureMapCancel (robust=True there), but AdaptiveTrigger's own normaliser was left un-latched. Prints per-segment stored fraction, the fraction of frames whose stat update was BLOCKED, z distribution, and the sd/mu scale ratio.",
+   "headline": "Defect confirmed with the mechanism: seq_000 and seq_002 have blocked=1.00 (the baseline never updates again) with z_median 12.53 and 59.34 against an onset threshold of 6, and they store 99.2% and 95.8% of the stream. Reporting the MEAN stored fraction over the 10 segments (0.233) is misleading because the distribution is bimodal: per-segment [0.992, 0.060, 0.958, 0.050, 0.109, 0.026, 0.000, 0.014, 0.086, 0.045], median 0.055, plus one segment at 0.000 that misses every event. The fix is TriggerConfig.robust=True (winsorized always-update, mirroring featmap_cancel's robust stats): locks go 2/10 -> 0/10 and mean stored 0.234 -> 0.034, with the default still robust=False so every published number is unchanged. Regression test: tests/test_gate_stats.py. IMPORTANT HONESTY NOTE: the two latched segments' high 'capture' under the released rule is an ARTIFACT of storing ~100% of the stream - fixing the latch LOWERS median capture from 0.343 to 0.268 because it stops buying coverage with unbounded storage."
+  },
+  {
+   "path": "runs/diag_gate_vs_random.json",
+   "producer": "scripts/diag_gate_vs_random.py",
+   "note": "Mechanism decomposition for why the wake gate loses to random scatter in runs/gate_operating_curve.json. Separates two hypotheses that would otherwise be confounded: (A) UNINFORMATIVE - the score's high frames are at the event base rate (no information about when events happen); (B) STRUCTURAL PENALTY - the gate emits clustered bursts while random scatter spreads evenly, and 'was any frame kept in this interval' favours spreading given equal frame counts. (A) is measured as frame-level enrichment = (share of top-k score frames inside event intervals) / base rate, for k over 0.5-10% of frames. (B) is measured as the number of connected runs and mean run length, against a random-scatter control at the same budget.",
+   "headline": "BOTH confirmed, so it is not merely a clustering artifact. (A) Enrichment median across the 10 segments is 0.673 (2% budget), 0.000 (0.5%), 0.640 (1%), 0.737 (5%), 0.897 (10%) - high-score frames are AT OR BELOW chance inside annotated events; 8 of 10 segments read below 1.0 at 2% and 7 of 10 read exactly 0.00 at 0.5% budget (the top frames fall entirely outside every interval), with only seq_008 reaching 2.90. (B) The gate emits median 8 runs at 0.5% budget where random scatter emits 21, rising to 126 vs 396 at 10% - a 2.6-3.1x clustering disadvantage, with mean run length 1.9-2.9 frames, and the interval-hit metric rewards spreading at equal frame cost. So the gate fails for two separable reasons at once: the signal is uninformative about event timing AND the trigger's burst structure is unfavourable for interval coverage at matched frame cost."
+  },
+  {
+   "path": "runs/event_moment_probe.json",
+   "producer": "scripts/probe_event_moment_signals.py",
+   "note": "Target-definition probe: does the previous round's negative result come from scoring the WHOLE annotated interval (boxcar) when the residual is mechanistically a change detector that should fire at content TRANSITIONS? Six signals scored against four targets at matched tolerance: boxcar (the released convention), onset (interval start +-0.5 s), offset (interval end +-0.5 s), and bounds (onset union offset). Signals span the cheapest-to-most-informed range available without frames: the two residual variants (shift/rotation), an UNCOMPENSATED feature-map frame difference (naive_fm, the dumbest baseline), and three pooled-feature traces (frame diff / EMA novelty / second difference). Significance by exact binomial sign test over the 10 segments (no normality assumption, effective n=10).",
+   "headline": "The target definition is NOT the reason the gate failed. Switching to transition moments does help directionally - offset beats onset consistently (0.538-0.590 vs 0.465-0.539), matching the intuition that an object's disappearance is also a change - but EVERY value stays in 0.5-0.6 and NONE of the 24 signal x target cells reaches p<0.05. The best three cells sit at p=0.109 (8/10 segments): feat_novelty/offset 0.590, feat_diff/offset 0.570, resid_shift/boxcar 0.516. Tolerance sensitivity (0.25/0.5/1.0 s) does not change this. The sharpest finding is the head-to-head: the residual with IMU compensation, per-cell negative images and robust statistics is INDISTINGUISHABLE from the dumbest possible baseline, an uncompensated feature-map frame difference (resid_rotation wins 5/10 on bounds, sign test p=1.000; vs feat_diff 5/10 p=1.000; vs feat_novelty 4/10 p=0.754). So the residual failing to gate is not a burst-structure artifact and not a target-definition artifact. Limitation recorded: data/aoe_event keeps no frames, so genuine low-level candidates (frame difference, blur, brightness) could not be compared - the strongest available front end is the cached MobileNetV3 features."
+  },
+  {
+   "path": "runs/labeled_gate_upper_bound.json",
+   "producer": "scripts/train_labeled_gate_upper_bound.py",
+   "note": "The one quantity the previous three rounds left unmeasured: if labels ARE allowed, how good can a gate get? This is the price of the label-free constraint, and the input to a keep/kill decision. Estimator is kNN label consistency (mean label over each frame's 15 nearest reference-pool frames) on the 576-d frozen pooled features - non-parametric, gradient-free, deterministic (no sklearn in this environment; distances via Gram form with a deterministic pool subsample). Protocol is leave-one-segment-out (10 folds) with the capture threshold calibrated on the 9 TRAINING segments only, so nothing peeks at the held-out segment. Two feature sets are reported separately to isolate the value of temporal context: 'raw' (static appearance only) and 'raw+time' (raw plus running-EMA novelty and frame-to-frame change, the two shapes the label-free probe kept surfacing). A within-scene variant (interleaved blocks, even = pool / odd = query) gives the optimistic bound.",
+   "headline": "Even WITH labels the event-moment signal is weak, and it does not transfer across scenes. Cross-scene LOO: frame AUC 0.478 (3/10 segments above 0.5, p=0.34) and AUC(bounds) 0.445 (2/10, p=0.11) - i.e. BELOW chance, because kNN neighbours match similar scene/hand appearance rather than event-ness; measured diagnostic on seq_005 shows frames with a nonzero score have a LOWER event rate (0.030) than frames with score exactly zero (0.0475), and the score is near-binarized. A hypothesis was tested and FALSIFIED on the way: label-prior shift (pool base rate minus segment base rate) correlates with AUC at r=+0.101, the wrong sign for that explanation. Adding the temporal channels changes nothing (raw+time AUC 0.478, delta on bounds +0.005, 8/10 segments positive but p=0.11). Within-scene (optimistic, interleaved blocks): AUC 0.589 (6/7 segments, p=0.13), capture@5% 0.333, onset capture 0.188. So the ceiling for a LABELED same-scene gate is about 0.59 AUC, and cross-scene is worse than random - meaning the bottleneck is not signal processing but the learnability of 'event moment' from 1-8 s coarse intervals with frame-level binary targets. Recommended: close the gate line; a future attempt needs finer supervision, not a better filter. Design note recorded honestly: the first within-scene attempt used a first-half/second-half split and was WRONG for this data - events are bunched, so 6 of 10 segments have zero event frames in the second half, leaving the pool without positives and degenerating the score to a constant (AUC exactly 0.500, no frame above threshold)."
+  }
+ ],
+ "figures": [
+  {
+   "path": "runs/aoe_peaks",
+   "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
+  },
+  {
+   "path": "runs/inspect_*.jpg",
+   "description": "Synthetic-rig frame inspections (event rendering checks)."
+  },
+  {
+   "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
+   "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
+  },
+  {
+   "path": "runs/debug_sync.png / runs/blend_*.png",
+   "description": "IMU-video sync and warp-vs-frame blend debug images."
+  }
+ ],
+ "logs": [
+  {
+   "path": "runs/capture.log",
+   "description": "webcam capture log"
+  },
+  {
+   "path": "runs/screencap*.log",
+   "description": "screen recording experiments"
+  },
+  {
+   "path": "runs/play*.log",
+   "description": "scene playback logs"
+  }
+ ]
 }
