@@ -497,5 +497,26 @@
    "path": "runs/play*.log",
    "description": "scene playback logs"
   }
- ]
+ ],
+ "engine": {
+  "doc": "GUIDE.md §4.8",
+  "implementation": "cerebellum_cancel/engine.py",
+  "cli": "scripts/cmci.py",
+  "tests": [
+   "tests/test_engine.py"
+  ],
+  "description": "One entry point that turns a recording into deliverables. Layering is a hard boundary: run() is the ONLY place that computes, exporters are pure functions reading the intermediate state (CMCIResult), and the CLI plus any future UI are thin shells over the same run() -- so there is never a second source of truth to drift (the public_edition lesson).",
+  "two_layer_filter": "Layer 1 (engine): motion dedup -- drops frames the rig's own motion already explains; measured to work, 0.033 ms/frame. Layer 2 (caller): semantic/business selection -- injected via rule=, because residual triggering answers WHERE something moved, not WHAT happened (falsified on real data, GUIDE 2.3.6-2.3.8). Every segment carries selection_reason so the output never conflates the two.",
+  "exporters": [
+   "dataset (cmci-dataset-1)",
+   "html (self-contained, inline SVG, honest disclosure)",
+   "jsonl (zero-dependency)",
+   "parquet (needs pyarrow)"
+  ],
+  "no_silent_degradation": [
+   "missing IMU warns that quality drops",
+   "missing pyarrow gives an actionable message instead of switching formats",
+   "empty selection is stated plainly rather than left as an empty table"
+  ]
+ }
 }

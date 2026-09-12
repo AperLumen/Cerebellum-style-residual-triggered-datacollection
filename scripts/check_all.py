@@ -89,6 +89,52 @@ def step_pyright() -> Step:
                               *STRICT_PYRIGHT, *LOOSE_PYRIGHT])
 
 
+def step_engine_smoke() -> Step:
+    """引擎端到端冒烟：真的跑一条录制并导出，确认产物存在。
+
+    为什么单列一步而不是只靠单测：单测用注入式 source（快、无依赖），
+    永远碰不到真实的解码器、真实的前端、真实的落盘路径。这一条是**唯一**
+    会真正读一个视频文件的检查——历史上 shape 契约不一致（read_gray 给
+    (H,W) 而 step 要 (H,W,3)）就是单测发现不了、只有真跑才暴露的那类问题。
+    """
+    return Step("引擎端到端冒烟", [PY, "-c", ENGINE_SMOKE])
+
+
+ENGINE_SMOKE = r'''
+import os, shutil, sys, tempfile
+import numpy as np
+from cerebellum_cancel.engine import run, EngineConfig
+
+# 优先用仓库里真实存在的短视频；没有就跳过（CI 上可能没有 data/）。
+cands = ["data/webcam_rec/video.mp4", "data/synthetic/frames"]
+src = next((c for c in cands if os.path.exists(c)), None)
+if src is None:
+    print("没有可用的本地视频，跳过（data/ 不入库，CI 上属于正常）")
+    sys.exit(0)
+
+out = tempfile.mkdtemp(prefix="cmci_smoke_")
+try:
+    res = run(src, None, cfg=EngineConfig(max_frames=90))
+    assert res.n_frames == 90, res.n_frames
+    assert res.score.dtype == np.float64
+    w = res.save(out, formats=("dataset", "html", "jsonl"))
+    for fmt, p in w.items():
+        assert os.path.exists(p), f"{fmt} 未生成: {p}"
+    # HTML 必须自包含（离线可开）
+    h = open(os.path.join(out, "index.html"), encoding="utf-8").read()
+    for bad in ("http://", "https://", "cdn."):
+        assert bad not in h, f"HTML 引了外部资源 {bad}"
+    # 诚实性声明必须在**任何**片段数下都存在（短片段常选到 0 个，
+    # 此时字面量 motion_dedup 不会出现——所以断言放在披露文案上，
+    # 而不是放在取值上）。
+    assert "第 1 层" in h and "不等于" in h, "HTML 未如实标注选择依据"
+    print(f"帧 {res.n_frames} / 片段 {len(res.segments)} / 导出 {sorted(w)}")
+    print("HTML 自包含且如实标注了选择依据（第 1 层 / 不等于语义重要）")
+finally:
+    shutil.rmtree(out, ignore_errors=True)
+'''
+
+
 def step_generate_pdf() -> Step:
     return Step("重建 GUIDE.pdf", [PY, "scripts/build_guide_pdf.py"],
                 note="纯派生物，变了会自动重建")
@@ -307,8 +353,9 @@ def main() -> int:
         print(f"找不到 venv python: {PY}", file=sys.stderr)
         return 2
 
-    steps: list[Step] = [step_tests(), step_pyright(), step_doc_refs(),
-                         step_manifest(), step_public_edition()]
+    steps: list[Step] = [step_tests(), step_pyright(), step_engine_smoke(),
+                         step_doc_refs(), step_manifest(),
+                         step_public_edition()]
     if not args.skip_pdf:
         steps += [step_generate_pdf(), step_verify_pdf()]
 

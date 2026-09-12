@@ -15,6 +15,10 @@ help:
 	@echo "make pdf        重建 GUIDE.pdf 并自检"
 	@echo "make guide      只重建 GUIDE.pdf（不编译 LaTeX 的话加 --skip-pdf）"
 	@echo "make clean-guide 删除 LaTeX 中间产物（guide.tex 等）"
+	@echo ""
+	@echo "用数据跑一次（引擎 CLI）："
+	@echo "  .venv/bin/python scripts/cmci.py run <video> --imu <csv> --out ./out"
+	@echo "  .venv/bin/python scripts/cmci.py run <video> --out ./out --dry-run"
 
 check:
 	@$(PY) scripts/check_all.py

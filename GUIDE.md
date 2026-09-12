@@ -26,11 +26,12 @@
   - 4.5 `rotwarp` 的输入契约（本模块最该有的那一层）
   - 4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
   - 4.7 自动化兜底：让前六节不退化
+  - 4.8 引擎与 CLI：把零件接成「塞数据进去、出数据集」
 - §5 证据索引与路线图
 
 > **本文档自包含。** 早期版本把几轮探查拆成独立文件、在目录里挂"专题记录"索引，
 > 现在已全部并入本文对应章节：守门与时刻信号进 §2.3.8、闸门缺陷进 §2.3.9、
-> 数据质检进 §2.3.10、两个落盘格式进 §4.1–4.2、工业稳定性进 §4.4–4.7。复现命令
+> 数据质检进 §2.3.10、两个落盘格式进 §4.1–4.2、工业稳定性进 §4.4–4.7、引擎与 CLI 进 §4.8。复现命令
 > 随各节就近给出。
 
 ---
@@ -1467,6 +1468,127 @@ make test           # 只跑测试
 make types          # 只跑类型检查
 make pdf            # 只重建 + 自检 PDF
 ```
+
+---
+
+## §4.8 引擎与 CLI：把零件接成"塞数据进去、出数据集"
+
+§4.1–4.7 造的都是**零件**（落盘格式、数据集容器、完整性哨兵、契约、门禁）。
+这一节把它们接成一条能直接用的线。
+
+### 4.8.1 分层：引擎 + 导出器（不是两套逻辑）
+
+需求有两种形态：**A 命令行**（能写命令的人）与 **B 前端**（不能的人）。
+关键判断：**它们不是两个产品，是同一件事的两个入口**。所以分层是硬边界：
+
+```
+输入适配          引擎（engine.run）            导出器
+----------        ----------------------       -------------------
+mp4 + csv    ->   run() -> CMCIResult    ->    dataset / html / jsonl / parquet
+frame dir    ->   （同一个 run()）              （纯函数，只读中间态）
+未来: 摄像头 ->   （同一个 run()）
+```
+
+`run()` 是**唯一**做计算的地方；导出器只读中间态、不碰引擎。CLI 和前端都只是
+`run()` + 选导出器的薄壳。这条边界是为防一类已经踩过的坑：同一套逻辑在 CLI 写
+一遍、在界面再写一遍，于是有两个真值源（`public_edition/` 的漂移是同一个病）。
+
+### 4.8.2 两层过滤——这是产品定义的核心
+
+"过滤出有用的片段"这个说法里藏着一个陷阱。**残差触发器只能回答"哪里动了"，
+回答不了"什么重要"**——后者在本项目已被四轮实验否证（§2.3.6–2.3.8，含 250 轮
+真实数据复核）。如果把它当"重要性筛选器"卖出去，就是把已知的负结果包装成产品
+能力。所以引擎把过滤明确拆开：
+
+| 层 | 谁负责 | 做什么 | 状态 |
+| --- | --- | --- | --- |
+| 第 1 层 | **引擎** | 运动去重：剪掉"设备自身运动能解释"的冗余帧 | ✅ 实测成立，成本 0.033 ms/帧 |
+| 第 2 层 | **调用方** | 语义/业务判断：哪些片段真的重要 | 取决于任务；引擎只留钩子 |
+
+这不是洁癖，是诚实性要求：**输出里每个片段都带 `selection_reason`**，如实标明
+它是被哪一层选中的（`motion_dedup` 或 `rule:<name>`），HTML 索引页也会把这句话
+写在醒目位置。
+
+第 2 层通过 `rule=` 注入：
+
+```python
+# my_rule.py
+def rule(segments, fv):
+    # fv: 只读逐帧视图（t / score / surprise / keep / gyro）
+    return [s for s in segments if s.peak_score > 20 and s.duration > 0.5]
+```
+
+给的是 `FrameView` 而不是完整 result——规则是调用方写的代码，不该有改坏引擎
+状态的机会。
+
+### 4.8.3 用法
+
+```bash
+# 塞进去 → 出数据集 + 可看的索引
+.venv/bin/python scripts/cmci.py run clip.mp4 --imu imu.csv --out ./out
+
+# 选格式（jsonl 零依赖；parquet 需 pyarrow）
+... --format dataset,html,jsonl,parquet
+
+# 先看会做什么，不读写文件
+... --dry-run
+
+# 接业务规则（第 2 层）
+... --rule my_rule.py
+
+# 看已有输出的摘要
+.venv/bin/python scripts/cmci.py info ./out
+```
+
+代码里：
+
+```python
+from cerebellum_cancel.engine import run, EngineConfig
+res = run("clip.mp4", "imu.csv", cfg=EngineConfig(max_frames=None))
+res.save("out/", formats=("dataset", "html"))
+print(res.summary())      # 帧数/片段/保留率/压缩比
+```
+
+### 4.8.4 三个"不静默"的设计
+
+1. **没有 IMU 要明确警告**——会退化成不补偿模式（任何晃动都被当成"变化"），
+   筛选质量明显更低。工具说清楚，而不是假装正常。
+2. **依赖缺失要给可执行的补救**——`parquet` 没有 pyarrow 时报
+   "pip install pyarrow，或者改用 --format jsonl（零依赖）"，不静默换格式。
+3. **空结果要明说**——没选出任何片段时 HTML 写"这通常意味着整段录制里没有
+   设备自身运动解释不了的变化……它**不**表示数据有问题"，而不是留一张空表
+   让人猜是"没跑"还是"没选到"。
+
+### 4.8.5 实测与验收
+
+真实 webcam 数据（900 帧 / 30 s）：
+
+```
+帧数 900 · 片段 5 个（合计 11.4 s）· 帧级保留 49.1% · 时长压缩到 38.2%
+产物: dataset（4 文件）/ index.html / frames.jsonl
+HTML: 自包含（无外部依赖）、内联 SVG 残差曲线 + keep 区间、5 行片段表
+      每行 selection_reason = motion_dedup（如实标注）
+```
+
+**单测之外还加了一条端到端冒烟**（`check_all.py` 的第 3 步）：单测用注入式
+source（快、无依赖），永远碰不到真实解码器/前端/落盘路径。这条冒烟是唯一真正
+读视频文件的检查——而它当场抓到一个单测发现不了的真缺陷：
+
+> `AcquisitionLayer.step` 要求 `(H,W,3)` RGB，而 `io.read_gray()` 给 `(H,W)`。
+> 直接传会炸在 torchvision 的 Normalize 上（`[1,224,224]` vs `[3,224,224]`），
+> 报错信息完全指不出真正原因。
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest tests/test_engine.py -q   # 26 passed
+PYTHONPATH=. .venv/bin/python -m pytest tests/ -q                  # 227 passed
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run \
+    data/webcam_rec/video.mp4 --out /tmp/cmci_out --max-frames 900
+```
+
+> **下一步（B 前端）**：前端应当是 `run()` 的又一个薄壳——选目录、看
+> `index.html` 那类视图、调阈值、导出。底层能力已经全在引擎里，所以做前端时
+> **不要**新写计算逻辑；否则又会分叉出第二个真值源。
+
 
 ---
 
