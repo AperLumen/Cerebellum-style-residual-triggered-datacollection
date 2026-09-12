@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .contracts import NonFiniteError, check_1d, check_gyro
+
 
 @dataclass
 class AdapterConfig:
@@ -51,8 +53,17 @@ class GranuleExpander:
 
 
 def action_features(gyro_row: np.ndarray) -> np.ndarray:
-    """[1, |gx|, |gy|, |gz|] normalized — corollary-discharge embedding."""
-    return np.concatenate([[1.0], np.abs(gyro_row[:3]) / 360.0]).astype(np.float32)
+    """[1, |gx|, |gy|, |gz|] normalized — corollary-discharge embedding.
+
+    Raises:
+        ShapeError: ``gyro_row`` 不足 3 维。
+        NonFiniteError: 含 NaN/Inf。
+
+    注：只取前 3 轴（corollary discharge 的物理含义是角速度 xyz），
+    但**不静默截断过长的输入**以外的行为：长度不足会报错，过长则取前 3。
+    """
+    g = check_gyro(gyro_row)
+    return np.concatenate([[1.0], np.abs(g[:3]) / 360.0]).astype(np.float32)
 
 
 def fit_slow_weights(granules: np.ndarray, targets: np.ndarray,
@@ -80,14 +91,25 @@ class CerebellumAdapter:
         self.n = 0
 
     def predict(self, feat_prev, gyro) -> tuple[np.ndarray, np.ndarray]:
-        phi = self.granule(feat_prev, action_features(gyro))
+        fp = check_1d(feat_prev, "feat_prev")
+        phi = self.granule(fp, action_features(gyro))
         w = self.w_slow + (self.w_fast if self.use_fast else 0.0)
         return phi @ w, phi
 
     def step(self, feat, feat_prev, gyro, warmup: int = 10) -> dict:
-        """One frame: predict from history, residual, gated plasticity."""
-        pred, phi = self.predict(feat_prev, gyro)
-        err = feat.astype(np.float32) - pred
+        """One frame: predict from history, residual, gated plasticity.
+
+        Raises:
+            NonFiniteError: 任一输入含 NaN/Inf。与 ``core.CerebellumCancel``
+                同一个失效模式：``err`` 会进入 ``resid_mu``/``resid_var``，
+                一旦被污染，此后所有帧的 ``surprise``/``zresidual`` 都是
+                NaN，而调用方看到的只是"数值异常"，没有任何报错。
+            ShapeError: ``feat``/``feat_prev`` 必须是 1 维且长度一致。
+        """
+        f = check_1d(feat, "feat")
+        fp = check_1d(feat_prev, "feat_prev", expected_len=len(f))
+        pred, phi = self.predict(fp, gyro)
+        err = f.astype(np.float32) - pred
         sd = np.sqrt(self.resid_var) + 1e-3
         surprise = float(np.abs(err).max() / sd.max())
 

@@ -32,6 +32,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .contracts import (ConfigError, NonFiniteError, check_1d, check_gyro,
+                        check_min_frames, check_positive)
+
 
 @dataclass
 class TriggerConfig:
@@ -41,6 +44,14 @@ class TriggerConfig:
     pre_roll: float = 0.3           # seconds saved before onset
     post_roll: float = 0.8          # seconds saved after off
     min_clip_len: float = 0.4       # seconds; shorter clips are merged
+    robust: bool = False            # winsorized always-update score stats
+                                    # (default keeps the released behaviour:
+                                    # the z<k gate freezes the baseline when
+                                    # surprise is dense, latching the gate
+                                    # OPEN — measured 2/10 event segments at
+                                    # stored 0.96-0.99, see
+                                    # runs/diag_gate_lock.json)
+    winsor: float = 3.0             # clip (in sd units) on the stat update
 
 
 @dataclass
@@ -71,15 +82,39 @@ class AdaptiveTrigger:
         self._inner_state: SurpriseTrigger | None = None  # created in update()
 
     def _stat_update(self, score: float):
+        """Update the score baseline. With ``cfg.robust`` the residual enters
+        winsorized at ``cfg.winsor`` sigma, so a dense burst of large scores
+        cannot freeze the baseline (and therefore cannot latch the gate open);
+        this mirrors ``featmap_cancel``'s robust stats one level down."""
         d = score - self.mu
+        sd = float(np.sqrt(self.var)) + 1e-3 * (abs(self.mu) + 1.0)
+        if self.cfg.robust:
+            lim = self.cfg.winsor * sd
+            d = float(np.clip(d, -lim, lim))
         self.mu += self.stat_ema * d
         self.var += self.stat_ema * (d * d - self.var)
 
     def update(self, t: float, score: float, fps: float) -> bool:
         """Feed one frame's raw score (e.g. maxcell z^2); returns True while
-        inside a triggered clip."""
+        inside a triggered clip.
+
+        Raises:
+            ConfigError: ``fps <= 0``（clip 边界以秒计，帧率为 0 会让所有
+                时间换算退化）或 ``t`` 非有限值。
+            NonFiniteError: ``score`` 为 NaN/Inf。这必须显式失败——一个 NaN
+                会经 ``_stat_update`` 进入 ``mu``/``var``，此后**每一帧**的
+                z 分数都是 NaN，触发静默失效且没有任何迹象。
+        """
+        if not np.isfinite(t):
+            raise ConfigError(f"t: 必须是有限标量，实得 {t!r}")
+        if not np.isfinite(score):
+            raise NonFiniteError(
+                f"score: 必须有限，实得 {score!r}。"
+                "NaN/Inf 一旦进入运行统计（mu/var），此后所有帧的 z 分数都是 "
+                "NaN，触发静默失效——必须在入口拦截。")
         if self._inner_state is None:
-            self._inner_state = SurpriseTrigger(self.cfg, fps)
+            self._inner_state = SurpriseTrigger(self.cfg,
+                                                check_positive(fps, "fps"))
         self.n += 1
         if self.n == 1:
             self.mu = float(score)
@@ -89,7 +124,11 @@ class AdaptiveTrigger:
             self._stat_update(score)
             return False
         on = self._inner_state.update(t, z, 1.0)
-        if not on and z < self.cfg.threshold_k:
+        if self.cfg.robust:
+            # always update, winsorized: the gate can never freeze the
+            # baseline, which is what latches it open under dense surprise
+            self._stat_update(score)
+        elif not on and z < self.cfg.threshold_k:
             self._stat_update(score)
         return on
 
@@ -147,15 +186,33 @@ class CerebellumCancel:
             residual_cells: (gx*gy,) non-negative residual per cell, already
                 compensated for rotation by the caller (see pipeline).
             gyro: (3,) gyro rates deg/s at this frame.
-            dt: seconds since previous frame.
+            dt: seconds since previous frame. ``dt <= 0`` is **legal** and
+                means "no elapsed time" — the action feature then keeps only
+                its bias term (see ``_features``).
 
         Returns dict with per-cell and frame-level surprise.
+
+        Raises:
+            ShapeError: ``residual_cells`` 不是 1 维或长度不等于网格大小；
+                ``gyro`` 不是 3 维。
+            NonFiniteError: 输入含 NaN/Inf（会污染在线统计，必须显式失败）。
+            ConfigError: ``dt`` 非有限值。
+
+        契约说明：修复前 ``.ravel()`` 会把任意多维输入**静默展平**，得到
+        "数值正常但语义错误"的结果；NaN 会静默污染 mu/var/neg，使后续所有帧
+        的判断失效且不报错。两者都是实测到的静默失败模式。
         """
-        r = np.asarray(residual_cells, dtype=np.float64).ravel()
+        gx, gy = self.grid
+        r = check_1d(residual_cells, "residual_cells",
+                     expected_len=gx * gy).astype(np.float64, copy=False)
+        g = check_gyro(gyro)
+        if not np.isfinite(dt):
+            raise ConfigError(f"dt: 必须是有限标量，实得 {dt!r}")
+
         if not self.state:
             self._init_state()
         s = self.state
-        feat = self._features(gyro, dt)
+        feat = self._features(g, dt)
 
         pred = (s["w_fast"] + s["w_slow"]) @ feat          # action-conditioned expectation
         err = r - pred - s["neg"]                          # what's truly unexpected
