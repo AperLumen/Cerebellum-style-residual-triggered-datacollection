@@ -164,18 +164,34 @@ def frozen_baseline_z(err: np.ndarray, n_frozen: int = FROZEN_FRAMES,
     if hi - lo < 2:                      # 太短：退回整段，但降级为不跳 warmup
         lo, hi = 0, max(t, 1)
     ref = flat[lo:hi]
-    if robust:
-        mu = np.median(ref, axis=0)
-        mad = np.median(np.abs(ref - mu), axis=0)
-        sd = 1.4826 * mad          # MAD -> sigma，正态下一致
-    else:
-        mu = ref.mean(axis=0)
-        sd = ref.std(axis=0)
-    # MAD 可能在常数格上为 0；退回该格的全段尺度，再退回极小值
-    sd = np.where(sd > 1e-9, sd, np.std(flat, axis=0))
-    sd = np.where(sd > 1e-9, sd, 1e-6)
-    z = (flat - mu) / sd
-    z = np.abs(z)
+    # 整段标定都用 errstate 包住：溢出**不被忽略**，而是下面显式检查结果
+    # 并抛契约异常（numpy 的 RuntimeWarning 容易被无视，异常不会）。
+    with np.errstate(over="ignore", invalid="ignore"):
+        if robust:
+            mu = np.median(ref, axis=0)
+            mad = np.median(np.abs(ref - mu), axis=0)
+            sd = 1.4826 * mad      # MAD -> sigma，正态下一致
+        else:
+            mu = ref.mean(axis=0)
+            sd = ref.std(axis=0)
+        # MAD 可能在常数格上为 0；退回该格的全段尺度，再退回极小值
+        sd = np.where(sd > 1e-9, sd, np.std(flat, axis=0))
+        sd = np.where(sd > 1e-9, sd, 1e-6)
+        z = np.abs((flat - mu) / sd)
+    # **fuzz 发现（2026-09-13，随机模式）**：大而有限的值（如 1e308）能让
+    # `np.median` 在求中间两数均值时**溢出成 inf**，随后 `inf - inf = nan`，
+    # 于是本函数静默返回**全 NaN 的 z 序列**——下游看到的是"残差不对"，
+    # 定位不到这里。与 `cells_of` / `rotation_homography` 同一个教训：
+    # **光查输入有限不够，必须查结果**。
+    # 这里用 RuntimeWarning 会被无视，所以显式检查并抛契约异常。
+    if not np.all(np.isfinite(z)):
+        n_bad = int(np.count_nonzero(~np.isfinite(z)))
+        mx = float(np.nanmax(np.abs(a))) if a.size else 0.0
+        raise NonFiniteError(
+            f"frozen_baseline_z: z 分数非有限（{n_bad}/{z.size}）。"
+            f"输入最大绝对值 {mx:.3g} 是有限值，但标定统计量（median/std）"
+            "在 float64 下溢出成 Inf，导致 inf/inf=NaN。"
+            "请先归一化残差量级再送进来。")
     if z.shape[1] == 1 or agg == "max":
         return z.max(axis=1)
     # mean 聚合：对"一片格子同时异常"的故障灵敏，且不被单格重尾主导。

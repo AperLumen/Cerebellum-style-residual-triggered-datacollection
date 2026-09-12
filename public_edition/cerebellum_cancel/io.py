@@ -219,7 +219,12 @@ def cells_of(residual: np.ndarray, grid: tuple[int, int]) -> np.ndarray:
         ShapeError: ``residual`` 不是 2 维，或某个方向比网格还小（此时
             ``cell_h`` 或 ``cell_w`` 为 0，会切出空数组并产出全 NaN——
             原实现正是如此，还伴随一条容易被忽略的 RuntimeWarning）。
-        NonFiniteError: ``residual`` 含 NaN/Inf。
+        NonFiniteError: ``residual`` 含 NaN/Inf，**或分格求均值时溢出**。
+
+    **fuzz 发现（2026-09-13，随机模式）**：输入 ``1e308`` 批量值能通过
+    有限性检查（它确实是有限值），但格内 49 个 1e308 求和**溢出成 Inf**，
+    于是静默返回含 Inf 的网格——与 ``rotation_homography`` 同一个教训：
+    **光查输入有限不够，必须查结果**。溢出不报错，下游只会看到"残差不对"。
     """
     gx, gy = int(grid[0]), int(grid[1])
     if gx <= 0 or gy <= 0:
@@ -235,4 +240,15 @@ def cells_of(residual: np.ndarray, grid: tuple[int, int]) -> np.ndarray:
             "像素）。此前会切出空数组并静默产出全 NaN。")
     cell_h, cell_w = h // gy, w // gx
     rr = r[: cell_h * gy, : cell_w * gx]
-    return rr.reshape(gy, cell_h, gx, cell_w).mean(axis=(1, 3)).ravel()
+    # 用 errstate 抑制 numpy 的 RuntimeWarning——我们**不忽略**溢出，
+    # 而是显式检查结果并抛出契约异常（警告容易被无视，异常不会）。
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = rr.reshape(gy, cell_h, gx, cell_w).mean(axis=(1, 3)).ravel()
+    if not np.all(np.isfinite(out)):
+        bad = int(np.count_nonzero(~np.isfinite(out)))
+        mx = float(np.nanmax(np.abs(r))) if r.size else 0.0
+        raise NonFiniteError(
+            f"cells_of: 分格均值溢出（{bad}/{out.size} 个格非有限）。"
+            f"输入最大绝对值 {mx:.3g} 是有限值，但格内求和在 float64 下"
+            "溢出成 Inf。请先归一化残差，或改用更稳健的聚合（如分位数）。")
+    return out

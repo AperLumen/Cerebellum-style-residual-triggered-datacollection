@@ -468,3 +468,56 @@ def test_visual_motion_estimate_rejects_bad_inputs():
         est.estimate(np.full((32, 32), np.nan), img)
     with pytest.raises(ContractError):
         est.estimate(np.zeros((4, 4)), np.zeros((4, 4)))   # 太小
+
+
+# ------------------------------------------- fuzz 随机模式找到的静默溢出
+# 背景：固定脏值目录跑 10 个种子结果完全一样（只有 random/random_img 随种子变），
+# 所以那不算"多次独立试验"。加入真·随机采样后，15 个种子里有 3 个各报出 1 个
+# 静默垃圾——都是同一个模式：**输入是有限值，但中间计算溢出成 Inf/NaN**。
+# 这与 rotation_homography 的教训一致：光查输入有限不够，必须查结果。
+
+def test_cells_of_rejects_aggregation_overflow():
+    """1e308 是有限值，但格内求和溢出 → 必须报错，不能静默返回 Inf 网格。
+
+    fuzz seed 1 / 9 / 14 各报出一次（随机模式，800 例/目标）。
+    """
+    from cerebellum_cancel.io import cells_of
+    with pytest.raises(ContractError):
+        cells_of(np.full((28, 28), 1e308), (4, 4))
+    # 正常量级必须照常工作（Guard）
+    out = cells_of(np.full((28, 28), 2.0), (4, 4))
+    assert np.allclose(out, 2.0)
+    # 大但**不至于溢出**的值也要正常通过（1e154 的 49 个和仍在 float64 内）
+    out2 = cells_of(np.full((28, 28), 1e154), (4, 4))
+    assert np.all(np.isfinite(out2))
+
+
+def test_frozen_baseline_z_rejects_statistic_overflow():
+    """1e308 会让 median/MAD 溢出成 inf，随后 inf-inf=NaN → 必须报错。
+
+    原实现静默返回**全 NaN 的 z 序列**，下游只看到"残差不对"。
+    """
+    from cerebellum_cancel.integrity import frozen_baseline_z
+    with pytest.raises(ContractError):
+        frozen_baseline_z(np.full(400, 1e308))
+    # 正常路径照常工作
+    z = frozen_baseline_z(np.random.default_rng(0).normal(size=(400, 48)))
+    assert z.shape == (400,)
+    assert np.all(np.isfinite(z))
+
+
+def test_frozen_baseline_z_emits_no_runtime_warning():
+    """溢出必须变成**异常**，而不是被无视的 RuntimeWarning。
+
+    警告会被日志淹没、被调用方忽略；异常不会。所以整个标定段用 errstate
+    包住，并且把 warnings 提成错误来验证。
+    """
+    import warnings
+    from cerebellum_cancel.integrity import frozen_baseline_z
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        # 溢出输入：应抛 ContractError（而不是冒 RuntimeWarning）
+        with pytest.raises(ContractError):
+            frozen_baseline_z(np.full(400, 1e308))
+        # 正常输入：不应有任何警告
+        frozen_baseline_z(np.random.default_rng(1).normal(size=(400, 32)))

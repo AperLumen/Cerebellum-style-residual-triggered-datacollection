@@ -132,6 +132,99 @@ def dirty_images(rng: np.random.Generator) -> list[tuple[str, Any]]:
     ]
 
 
+# ------------------------------------------------- 真·随机值（--random 模式）
+#
+# **动机（2026-09-13）**：上面那批脏值是**固定目录**——12 个 TARGETS × ~15 个
+# 精选值，而且只有 `random`/`random_img` 两项随种子变。实测：seed 1/2/3/7/11/
+# 42/99/123/777/2026 跑出来**完全一样**。也就是说"多跑几遍"在旧实现下不是
+# 多次独立试验，而是把同一份清单重复十遍。
+#
+# 真正要找"没想到的输入"，必须让**值本身**随机。这里按类型从一个大得多的
+# 空间里采样：量级指数均匀（覆盖 1e-320 到 1e308）、随机形状、随机 dtype、
+# 随机嵌套结构。种子不同 → 值不同 → 真的能扫到没覆盖的角落。
+
+def random_number(rng: np.random.Generator) -> tuple[str, Any]:
+    """采一个随机标量（可能落在任何奇怪的类型/量级上）。"""
+    choice = rng.integers(0, 12)
+    if choice == 0:
+        # 指数均匀的量级：1e-320 .. 1e308（含次正规与溢出边界）
+        e = rng.uniform(-320, 308)
+        return f"mag10e{e:.0f}", float(10.0 ** e)
+    if choice == 1:
+        return "randn", float(rng.standard_normal())
+    if choice == 2:
+        return "absurd", float(rng.standard_normal() * 10.0 ** rng.integers(300, 309))
+    if choice == 3:
+        return "special", float(rng.choice(
+            [_NAN, _INF, -_INF, 0.0, -0.0, 5e-324, 1.7976931348623157e308]))
+    if choice == 4:
+        return "int", int(rng.integers(-10 ** rng.integers(1, 19), 10 ** rng.integers(1, 19)))
+    if choice == 5:
+        return "bool", bool(rng.integers(0, 2))
+    if choice == 6:
+        return "complex", complex(rng.standard_normal(), rng.standard_normal())
+    if choice == 7:
+        return "str", rng.choice([
+            "abc", "1e999", "nan", "inf", "-1", "0x10", "", "  7  ", "1_000",
+            "٣", "１", "0b1", "1e", "--1", "1.2.3"])
+    if choice == 8:
+        return "none", None
+    if choice == 9:
+        return "bytes", bytes([rng.integers(0, 256) for _ in range(rng.integers(0, 4))])
+    if choice == 10:
+        return "nested", [rng.standard_normal() for _ in range(rng.integers(0, 3))]
+    return "obj", object()
+
+
+def random_array(rng: np.random.Generator, *, like: str) -> tuple[str, Any]:
+    """采一个随机数组。``like`` 提示目标期望的形状（numbers/arrays/gyros/images）。"""
+    choice = rng.integers(0, 10)
+    if like == "gyros" and choice < 4:
+        n = int(rng.choice([0, 1, 2, 3, 4, 3, 3]))
+    elif like == "images" and choice < 4:
+        h = int(rng.choice([0, 1, 2, 4, 8, 28, 28, 64]))
+        w = int(rng.choice([0, 1, 2, 4, 8, 28, 28, 64]))
+        n = (h, w)
+    else:
+        n = int(rng.choice([0, 1, 2, 7, 48, 100]))
+
+    if choice == 0:
+        return "rand_shape", rng.standard_normal(n)
+    if choice == 1:
+        return "rand_2d", rng.standard_normal((int(rng.integers(0, 5)), int(rng.integers(0, 5))))
+    if choice == 2:
+        # 随机量级均匀分布在指数上 —— 包含会溢出 float32/矩阵乘法的值
+        e = rng.uniform(-320, 308)
+        return f"magnitude{e:.0f}", np.full(n, 10.0 ** e)
+    if choice == 3:
+        arr = rng.standard_normal(n)
+        if arr.size:
+            k = int(rng.integers(0, arr.size + 1))
+            arr.flat[rng.choice(arr.size, size=k, replace=False)] = rng.choice([_NAN, _INF, -_INF])
+        return "sparse_nonfinite", arr
+    if choice == 4:
+        return "int_dtype", rng.integers(-100, 100, size=n)
+    if choice == 5:
+        return "bool_dtype", rng.integers(0, 2, size=n).astype(bool)
+    # 注：用整数下标选元素而不是 `rng.choice([混合类型列表])`——
+    # pyright 无法为异构列表解析 numpy 的 choice 重载（会报 4 个错）。
+    # 下标形式既清晰又类型干净。
+    size = int(np.prod(n)) if isinstance(n, tuple) else int(n)
+    if choice == 6:
+        pool: list[Any] = [object(), "x", None, 1.0]
+        return "object_dtype", np.array(
+            [pool[int(rng.integers(0, len(pool)))] for _ in range(size)],
+            dtype=object)
+    if choice == 7:
+        pool2: list[Any] = [1, "a", None, _NAN]
+        return "str_dtype", np.array(
+            [str(pool2[int(rng.integers(0, len(pool2)))]) for _ in range(size)])
+    if choice == 8:
+        return "empty_after_reshape", np.zeros(n).reshape(
+            (1, -1) if np.prod(n) > 0 else (0, 0))
+    return "list_like", [float(rng.standard_normal()) for _ in range(size)]
+
+
 # ---------------------------------------------------------------- 目标定义
 #
 # 每个目标：怎么调、用哪些脏值、以及**哪些"脏值"其实合法**（白名单）。
@@ -301,21 +394,45 @@ def probe_one(t: Target, label: str, value: Any) -> Finding:
     return Finding(t.func, label, "SILENT_GOOD", getattr(r, "shape", ""))
 
 
-def run_target(t: Target, n_per_label: int, seed: int) -> list[Finding]:
+def run_target(t: Target, n_per_label: int, seed: int,
+               *, random_mode: bool = False,
+               n_random: int = 0) -> list[Finding]:
     rng = np.random.default_rng(seed)
-    if t.kind == "numbers":
-        pool = dirty_numbers()
-    elif t.kind == "gyros":
-        pool = dirty_gyros()
-    elif t.kind == "images":
-        pool = dirty_images(rng)
-    else:
-        pool = dirty_arrays(rng)
+    if random_mode:
+        # 真·随机模式：值本身随机，不依赖固定目录。
+        # 这是唯一能让"多跑几遍"真的可能是多次独立试验的方式。
+        out: list[Finding] = []
+        # 先跑一遍固定目录（它们有明确的白名单理由，是回归护栏）
+        for label, v in _catalogue(t, rng):
+            out.append(probe_one(t, label, v))
+        gen = random_number if t.kind == "numbers" else None
+        for i in range(n_random):
+            if t.kind == "numbers":
+                label, v = random_number(rng)
+            elif t.kind == "gyros":
+                label, v = random_array(rng, like="gyros")
+            elif t.kind == "images":
+                label, v = random_array(rng, like="images")
+            else:
+                label, v = random_array(rng, like="arrays")
+            # 随机值不可能在白名单里逐条列理由，所以统一打标签前缀
+            out.append(probe_one(t, f"rand:{label}", v))
+        return out
+
+    pool = _catalogue(t, rng)
     # 随机重复 n_per_label 次（对确定性工厂是冗余的，但为将来加入随机工厂留位）
-    out = []
-    for label, v in pool * max(1, n_per_label):
-        out.append(probe_one(t, label, v))
-    return out
+    return [probe_one(t, label, v) for label, v in pool * max(1, n_per_label)]
+
+
+def _catalogue(t: Target, rng: np.random.Generator) -> list[tuple[str, Any]]:
+    """固定的脏值目录（带白名单的理由）。"""
+    if t.kind == "numbers":
+        return dirty_numbers()
+    if t.kind == "gyros":
+        return dirty_gyros()
+    if t.kind == "images":
+        return dirty_images(rng)
+    return dirty_arrays(rng)
 
 
 # ------------------------------------------------------------------- 主流程
@@ -327,6 +444,10 @@ def main() -> int:
                     help="每个脏值重复探测次数")
     ap.add_argument("--only", default=None, help="只测匹配的模块/函数名")
     ap.add_argument("--json", default=None, help="把结果写 JSON")
+    ap.add_argument("--random", action="store_true",
+                    help="在固定目录之外，额外采样 N 个真·随机值")
+    ap.add_argument("--cases", type=int, default=200,
+                    help="--random 时每个目标采多少个随机值")
     args = ap.parse_args()
 
     print("=" * 74)
@@ -339,7 +460,8 @@ def main() -> int:
     for t in TARGETS:
         if args.only and args.only not in f"{t.module}.{t.func}":
             continue
-        fs = run_target(t, args.repeat, args.seed)
+        fs = run_target(t, args.repeat, args.seed,
+                        random_mode=args.random, n_random=args.cases)
         all_findings += fs
 
         # 分类汇总；白名单项不计入问题
@@ -348,8 +470,15 @@ def main() -> int:
         bad = [f for f in fs if f.verdict == "SILENT_BAD"]
         good = [f for f in fs if f.verdict == "SILENT_GOOD"]
         skipped = [f for f in fs if f.verdict == "SKIPPED"]
-        known = [f for f in good if f.label in t.allowed]
-        suspect = [f for f in good if f.label not in t.allowed]
+        # 随机采样的值**不可能**预先写进白名单（它们是每次新生成的），
+        # 所以不能拿"在不在 allowed 里"判定。对它们而言，安静返回**正常**结果
+        # 本来就是预期——毕竟随机值里绝大多数是合法数值。真正的信号是
+        # SILENT_BAD / RAISED_OTHER，而那两类与标签无关，照样会报。
+        known = [f for f in good
+                 if f.label in t.allowed or f.label.startswith("rand:")]
+        suspect = [f for f in good
+                   if f.label not in t.allowed
+                   and not f.label.startswith("rand:")]
 
         flag = "✓" if not (other or bad or suspect) else "✗"
         print(f"{flag} {t.module}.{t.func}")
@@ -372,8 +501,12 @@ def main() -> int:
     suspect = []
     for t in TARGETS:
         for f in all_findings:
+            # 与逐目标显示**必须同一口径**（否则总计与明细会打架——
+            # 这是本脚本自己踩过的坑：随机模式下明细全 ✓、总计却说 518 待判，
+            # 因为这里漏了 `rand:` 前缀的豁免）。
             if (f.verdict == "SILENT_GOOD" and f.target == t.func
-                    and f.label not in t.allowed):
+                    and f.label not in t.allowed
+                    and not f.label.startswith("rand:")):
                 suspect.append(f)
 
     print()

@@ -93,16 +93,26 @@ def step_fuzz() -> Step:
     """随机污染探测：确认非法输入要么被契约拦住，要么被明确白名单接受。
 
     为什么值得常驻：单元测试只能覆盖**想到的**失败模式，而契约加固的价值恰恰
-    在于覆盖没想到的。本步骤用固定的随机种子喂入各类脏值（NaN/Inf/超大/
-    字符串/object dtype/错形状），把结果分成四类——RAISED（好）、
-    SILENT_GOOD（需白名单+理由）、SILENT_BAD（**坏**，悄悄返回垃圾）、
-    RAISED_OTHER（**坏**，抛的不是 ContractError，调用方无法统一处理）。
+    在于覆盖没想到的。本步骤喂入各类脏值（NaN/Inf/超大/字符串/object dtype/
+    错形状/超小图），把结果分成四类——RAISED（好）、SILENT_GOOD（需白名单+
+    理由）、SILENT_BAD（**坏**，悄悄返回垃圾）、RAISED_OTHER（**坏**，抛的
+    不是 ContractError，调用方无法统一处理）。
 
     退出码非 0 即代表出现后两类。历史上它抓到过 check_min_frames 放行 NaN、
-    rotation_homography 静默产出全 NaN 矩阵、以及 check_scalar 的转换漏出
-    原生 TypeError —— 这些都是单测没覆盖的。
+    rotation_homography 静默产出全 NaN 矩阵、check_scalar 的转换漏出原生
+    TypeError，以及（随机模式下）cells_of / frozen_baseline_z 的**静默数值
+    溢出**——这些都是单测没覆盖的。
+
+    **为什么用 --random（2026-09-13 补）**：只用固定目录时，seed 1/2/3/…/2026
+    跑出来**完全一样**，因为只有两项脏值随种子变。那不是多次独立试验，是同一份
+    清单重复十遍。加上真·随机采样后，15 个种子里有 3 个各报出一个静默垃圾。
+    本步骤用动态种子（跑一次换一个），所以每次都能扫到新角落。
     """
-    return Step("契约随机污染", [PY, "scripts/fuzz_contracts.py"])
+    seed = int(time.time()) % 100000
+    return Step("契约随机污染", [PY, "scripts/fuzz_contracts.py",
+                                  "--random", "--cases", "400",
+                                  "--seed", str(seed)],
+                note=f"真·随机采样，seed={seed}（每次运行不同）")
 
 
 def step_engine_smoke() -> Step:

@@ -27,6 +27,7 @@
   - 4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
   - 4.7 自动化兜底：让前六节不退化
     - 4.7.1 契约随机污染：用随机而不是想象去找 bug
+      - 4.7.1.1 固定目录不是随机：`--random` 才发现的两个静默溢出
   - 4.8 引擎与 CLI：把零件接成「塞数据进去、出数据集」
   - 4.9 没有 IMU 怎么办：先调研，再决定不做什么
   - 4.10 `io.py`：最后一个没有契约的模块（也是最该有的那个）
@@ -1589,13 +1590,46 @@ PYTHONPATH=. .venv/bin/python scripts/check_all.py
 `Assertion failed: src.type() == CV_8UC1`。**校验用的 dtype 和计算用的 dtype
 是两回事**，归一化后必须显式转回 `uint8` 再交给 cv2。
 
+#### 4.7.1.1 固定目录不是随机：`--random` 才发现的两个静默溢出
+
+上面三轮加固用的是**固定脏值目录**（12 个目标 × ~15 个精选值）。它的盲区在
+2026-09-13 被自己暴露出来：**seed 1/2/3/7/11/42/99/123/777/2026 跑出来完全
+一样**——因为只有 `random`/`random_img` 两项随种子变。所谓"多跑几遍"在旧实现
+下不是多次独立试验，而是把同一份清单重复十遍。
+
+补上真·随机采样（`--random --cases N`：量级在指数上均匀覆盖 1e-320…1e308、
+随机形状/dtype/嵌套结构/bytes/complex）后，**15 个种子里 3 个各报出一个静默垃圾**。
+
+**两个 bug 是同一个模式**——输入是**有限值**，中间计算溢出：
+
+| 入口 | 现象 | 根因 |
+| --- | --- | --- |
+| `cells_of(1e308, (4,4))` | 静默返回**含 Inf 的网格** | 格内 49 个 1e308 求均值溢出 |
+| `frozen_baseline_z(1e308)` | 静默返回**全 NaN 的 z 序列** | `np.median` 求中间两数均值时溢出成 inf → `inf-inf=NaN` |
+
+这与 §4.5 的 `rotation_homography` 是**同一个教训的第二次出现**：**光查输入
+有限是不够的，必须查结果**。两个都改成"算完检查结果、非有限即抛
+`NonFiniteError`，并用 `np.errstate` 把警告压成异常"——因为
+`RuntimeWarning` 会被日志淹没、被调用方忽略，而异常不会。
+
+**还有一个"聚合器与明细口径不一致"的自伤**：加了随机模式后，逐目标显示全是 ✓
+而总计说"518 待判"——因为总计那段忘了跳过 `rand:` 前缀（随机值不可能预先写进
+白名单）。**同一件事在两处用不同口径算，是这类汇总代码的经典 bug**；现在两处
+口径写死一致，并在代码里留了注释。
+
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py        # 人类可读
-PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py --json out.json
+# 固定目录（回归护栏，快）
+PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py
+# 真·随机（找新 bug）；--cases 是每个目标采多少例
+PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py --random --cases 800
+PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py --random --json out.json
 ```
 
+实测扫过的量：60 个种子 × 600 例 ≈ **36,000 次随机探测**，0 静默垃圾。
+`make check` 里的那一步用**动态种子**（每次运行不同），所以每次都扫新角落。
+
 退出码非 0 即代表存在 `SILENT_BAD`/`RAISED_OTHER`/无理由的 `SILENT_GOOD`。
-它已作为第 3 步接入 `make check`（耗时 0.2 s）。
+它已作为第 3 步接入 `make check`（耗时 0.3 s）。
 
 ```bash
 make check          # 或 scripts/check_all.py
