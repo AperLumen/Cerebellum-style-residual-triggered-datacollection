@@ -98,6 +98,50 @@ def main() -> int:
         ok = False
     else:
         print("    ✓ §4.4 层级正确（不是一级）")
+
+    # **编号必须是单套**（曾出过 bookmarksnumbered 与标题自带编号打架的 bug：
+    # 书签显示 "6.6 §4.7 自动化兜底"，读者以为有两个目录）。
+    # 判据：书签标题里不应出现 "数字.数字 " 这种 LaTeX 自动编号前缀。
+    auto_num = [t for _, t in outline
+                if re.match(r"^\d+\.\d+\s+§", t or "")]
+    if auto_num:
+        print(f"    ✗ 书签带 LaTeX 自动编号前缀（{len(auto_num)} 条），"
+              "与标题自带编号打架：")
+        for t in auto_num[:3]:
+            print(f"        {t}")
+        ok = False
+    else:
+        print("    ✓ 编号单一（无 LaTeX 自动编号前缀）")
+
+    # **章节顺序必须递增**（曾出过 §5 夹在 §4.4 和 §4.5 之间的 bug——
+    # 章节被搬乱了，书签顺序跟着乱）。判据：一级标题里的 §N 必须单调不减，
+    # 且 §4 的所有子节（4.x）都出现在 §5 之前。
+    tops = [t for d, t in outline if d == 0]
+    secs = []
+    for t in tops:
+        m = re.match(r"^§(\d+)\b", t.strip())
+        if m:
+            secs.append(int(m.group(1)))
+    if secs != sorted(secs):
+        print(f"    ✗ 一级章节顺序错乱: {secs}（应为递增）")
+        ok = False
+    else:
+        print(f"    ✓ 一级章节顺序递增: {secs}")
+
+    # §4.x 子节必须都在 §5 之前
+    def _pos(pred):
+        for i, (_, t) in enumerate(outline):
+            if pred(t or ""):
+                return i
+        return -1
+
+    i_5 = _pos(lambda t: re.match(r"^§5\b", t.strip()))
+    i_410 = _pos(lambda t: "4.10" in t)
+    if i_5 >= 0 and i_410 >= 0 and i_410 > i_5:
+        print("    ✗ §4.10 出现在 §5 之后（章节被搬乱过）")
+        ok = False
+    elif i_5 >= 0 and i_410 >= 0:
+        print("    ✓ §4.x 子节全部在 §5 之前")
     print()
 
     # --- 2. 可点击链接

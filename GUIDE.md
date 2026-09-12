@@ -4,34 +4,7 @@
 >
 > 所有数字为实测值；[manifest.json](manifest.json) 里的 JSON 链接只是深度复现索引（结果文件不入 git），精确复现命令在 [README.md](README.md) / [README.zh.md](README.zh.md)。
 
-## 目录
-
-- §0 为什么做这个方向，以及现状速览
-- §1 方法与成本账
-- §2 从论文到工程问题
-  - 2.1 论文在讲什么（背景与三大发现）
-  - 2.2 启发 → 工程问题总表
-  - 2.3 实验叙事（含边界测量与真负结果）
-    - 2.3.1–2.3.5 合成 regime 与成本账
-    - 2.3.6–2.3.7 真实数据下游价值：合成优势未迁移、主场也没赢（定义域边界）
-    - 2.3.8 推理期守门：换判据、换目标、给标签，三条路全否（定义域边界）
-    - 2.3.9 守门暴露的真缺陷：AdaptiveTrigger 闸门锁死
-    - 2.3.10 换问题：用残差找数据里的错（部分成立）
-- §3 跨学科视角：小脑怎么想问题
-- §4 正向交付：落盘层与多模态数据集
-  - 4.1 记录格式 v2（在线单流，掉电安全）
-  - 4.2 多模态数据集格式（离线容器，可训练）
-  - 4.3 采集链路完整性哨兵
-  - 4.4 输入契约：把静默失败变成显式失败
-  - 4.5 `rotwarp` 的输入契约（本模块最该有的那一层）
-  - 4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
-  - 4.7 自动化兜底：让前六节不退化
-    - 4.7.1 契约随机污染：用随机而不是想象去找 bug
-      - 4.7.1.1 固定目录不是随机：`--random` 才发现的两个静默溢出
-  - 4.8 引擎与 CLI：把零件接成「塞数据进去、出数据集」
-  - 4.9 没有 IMU 怎么办：先调研，再决定不做什么
-  - 4.10 `io.py`：最后一个没有契约的模块（也是最该有的那个）
-- §5 证据索引与路线图
+> **怎么用这份 PDF。** 左栏（PDF 书签/大纲）是全文结构，可逐级展开；正文里另有一页可点击目录。**这里刻意不手写目录**——手写的目录会和自动生成的那份不一致（实测：加了一节正文却忘了改手写目录，于是两份目录打架），所以导航只保留**一份**，由标题层级自动生成。
 
 > **本文档自包含。** 早期版本把几轮探查拆成独立文件、在目录里挂"专题记录"索引，
 > 现在已全部并入本文对应章节：守门与时刻信号进 §2.3.8、闸门缺陷进 §2.3.9、
@@ -1134,7 +1107,7 @@ PYTHONPATH=. .venv/bin/python scripts/probe_detectability_vs_span.py --force
 
 ---
 
-## §4.4 输入契约：把静默失败变成显式失败
+### §4.4 输入契约：把静默失败变成显式失败
 
 工业化的门槛不是"功能更多"，而是**失败模式可预测**。一个模块可以被依赖，
 前提是它的非法输入行为是确定的；否则每个调用点都不得不自行防御，而且防御
@@ -1226,179 +1199,7 @@ PYTHONPATH=. .venv/bin/python scripts/build_dataset.py \
 
 ---
 
-## §5 证据索引与路线图
-
-### 5.1 证据索引
-
-所有数据集、结果 JSON、图表、日志的完整索引（路径、生成脚本、头指标）见 **[manifest.json](manifest.json)**。关键结果文件：
-
-- `runs/downstream_results.json` — 下游训练对比（合成 rig）：cerebellum 3.4% 存储 / AP 0.298 / evRec@10 0.96 vs uniform 4x 预算 / AP 0.145 / evRec@10 0.69 vs oracle
-- `runs/trans_eval_data_aoe_motion_val.json` — 平移项负结果（`scripts/run_trans_eval.py`）：常深度均匀平移 warp 比纯旋转更差（0.0901 → 0.0938），模型类错误非标定可修
-- `runs/downstream_aoe_results.json` — 真实数据下游价值旧版（`scripts/train_downstream_aoe.py`，9 段单 split）：合成优势未迁移；已被 `runs/downstream_aoe_cv.json` 的 105 轮版本取代
-- `runs/downstream_aoe_cv.json` — 真实数据下游价值稳健版（`scripts/run_downstream_aoe_cv.py`，12 段 3-fold × 35 seed = 105 轮/方法，9 类动词）：cerebellum 0.162±0.077 vs uniform 1x 0.173±0.082 vs oracle 0.164±0.088，全部 1σ 重合——"未迁移"有统计支撑
-- `runs/downstream_event_results.json` — 稀疏物理事件 regime 检验（`scripts/train_downstream_event.py`，5 段 drop/throw/toss/break，LOO × 25 seed = 125 轮/方法）：oracle（12.4% 存储）0.204±0.149 明显最优，cerebellum（43.4%）与 uniform 1x 打平——主场 regime 假设未确认（§2.3.7）
-- `runs/detection_synth_results.json` — 检测级下游对比（`scripts/train_detection_synth.py`，CenterNet 风格热点头 + 检测 AP，20 seeds）：cerebellum 3.4% 存储 AP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003，全方法噪声级且 1σ 重合——评估经完美预测 AP=1.0 回归守住（`tests/test_detection_synth.py`），根因是冻结特征瓶颈：MobileNetV3 `features[:3]` 对平坦 blob 几乎无响应（`scripts/diag_detection_rig.py` / `scripts/diag_upper_bound.py`，图 `runs/diag_*.png`；全量 24k 帧上界 train AP 0.56 / val 0.003，同分布 train-on-val ceiling 仅 0.415）。检测级信号在 features[:3] 下不存在，backbone 替换（路线图项 2）优先级上调
-- `runs/trigger_scan_s8.json` — backbone 替换路线（路线图项 2）关闭判决（`scripts/run_trigger_scan_s8.py`，40 训练段同口径双 backbone 触发扫描）：DINOv1 ViT-S/8 触发 3/40 段 vs MNV3 11/40——patch token 事件区分度足够（ev99 0.27 vs 0.23）但激励持续性不足（z_ema 峰值卡在门限 6 下）。此前 DINOv2 S/14 帧级/检测级对比（`runs/downstream_dino.json` / `runs/detection_synth_dino_results.json`）因 S/14 触发 0 段全面退化（uniform 行 detAP 甚至 NaN），诊断见 `scripts/diag_dino_trigger*.py`：S/14 高分帧全是非事件 patch 量化毛刺，且 per-channel 标准化在残差管线内是恒等变换，协议内不可修；DINOv2 S/8 官方权重已下架
-- `runs/downstream_dino.json` / `runs/detection_synth_dino_results.json` — DINOv2 S/14 双对比原始输出（20 seeds）：帧级 uniform 5.2% 存储 AP 0.196 / evRec@10 0.79（cerebellum/oracle 因 0 触发无信息量）；检测级 uniform 行 detAP NaN（all-zero-peak seed 的既有汇总脆性）。仅 uniform 行有效，供存档参照
-- `runs/raft_eval_data_dataset_val.json` / `runs/raft_eval_data_aoe_motion_val.json` — RAFT 光流上限对照（`scripts/run_raft_eval.py`）：合成 val 5 段 RAFT 0.1054 ≈ DIS 0.1056；真实高运动 2 段 RAFT 0.0544 vs DIS 0.0522；RAFT 慢 ~20 倍
-- `runs/portable_check.json` — CPU vs MPS 可移植性（`scripts/run_portable_check.py`）：特征最大相对差 2e-6、下游残差差 3.7e-9；backbone 1.76 ms (CPU) vs 1.06 ms (MPS)
-- `runs/flow_eval_motion.json` — 真实高运动 224px（naive 0.080 / gyro 0.090 / flow 0.052）；`runs/flow_eval_motion448.json` — 同对片段 448px 交叉（0.0535 / 0.0614 / 0.0684，设计规则未迁移）；`runs/flow_eval_synth448.json` — 合成 448px（分辨率收益 -58% 的参照）；`runs/flow_eval_event.json` — 事件 5 段质量基线（DIS 8.18 ms、gyro shift 0.033 ms、flow step 6.40 ms/帧）
-- `runs/flow_eval.json` — `run_flow_eval.py` 的最近一次输出（每次运行覆盖；历史运行均已按上表备份为独立文件）
-- `runs/arbiter_eval_aoe9.json` — 仲裁级联 n=9 桌面段（140 候选 run/段、否决 8–31%、stored 0.89→0.72、evRec 1.00→0.94）；`runs/arbiter_eval.json` — 同脚本的高运动对运行（91 run/段、stored 0.91→0.76、摊销 0.58 ms/帧）
-- `runs/aoe_peaks/` — 真实数据残差峰值帧（快速手部运动 + 运动模糊，AUC 0.47 反相关的视觉证据）
-- `data/aoe_src/` — Open-AoE 原始 segment（含 SLAM 轨迹与原子动作标注，来源 hf-mirror inclusionAI/OpenAoE-2000h；由 scripts/fetch_aoe.py 按场景/动作多样性选取）；`data/aoe_event/` — 事件型片段 5 段（verb ∈ {drop,throw,toss,break}，`scripts/prep_aoe.py --event-verbs` 导出事件区间）
-
-### 5.2 当前边界（实测，非推测）
-
-1. 合成 rig 上全流程成立；真实 egocentric 视频上触发已恢复（robust 统计），已在 12 个跨场景 segment 上复现，且行走级 probe 已测（4 段 p95 71–75°/s，§0 表第 13 行）：gyro warp 在行走级 3/4 段比 naive 更差——真实数据的残差质量优势不随运动增大而兑现，反而被模型类误差（平移/视差/滚动快门）和 SLAM 副本退化双重放大；
-2. gyro warp 的收益被分辨率门控，但这条设计规则只在合成数据上成立（实测三档输入：验证集平静残差收益 -41%/-52%/-58%，未饱和；桌面级自运动在 224 px 下物理中性（亚像素）。448 px 真实高运动交叉（`runs/flow_eval_motion448.json`）证伪了向真实的迁移：gyro 依然帮倒忙（+15%），光流逐段翻转——真实数据的损伤由纯旋转模型看不见的成分主导（平移/视差、滚动快门），分辨率修估计器误差、修不了模型类误差。平移项已实测补过：常深度均匀 warp 是负收益（§2.3.5），要补平移就得带深度结构；roll 未建模仍是次级缺口；
-3. 光流仲裁级联的价值（结构保险）尚未在真实失效模式（roll/视差/大标定误差）上兑现；
-4. 真实数据上的"值不值"已测到 105–250 轮精度（§2.3.6/§2.3.7，均为**定义域边界**）：合成优势不迁移到稠密语义任务；稀疏事件 regime 主场检验 10 段 250 轮确认 cerebellum ≈ uniform；追测排除了"自运动没分离干净"的归因（真值平移在区间内外都是负收益），读出端升级也确认 z 图幅度与空间模式零事件信号（三种存储方法 AP 逐位相同）。**"用相机侧残差去回答世界侧语义问题"在真实 egocentric 数据上从预测、建模、读出、时间定位四个方向全部越出定义域**；该 binary 任务本身的 oracle 上限也不高（0.144±0.128）；
-5. 真 gyro 通路（iPhone 实拍）未验证；SLAM 轨迹是替身，且在低纹理/快速运动时 SLAM 自身失效——两种失败模式要分开看。
-
-### 5.3 路线图
-
-上一轮近期三项（读出端升级 / 行走级 probe / 价值收敛）已全部执行完毕：1 负结果（§2.3.7 追测④），2 负结果（§0 表第 13 行），3 已写入 §2.3.7 收敛段。真实数据价值线收敛后，火力转回已成立的合成 regime 与协议层工程化。
-
-**近期（2026-09-07 新一轮）**
-
-1. **合成 rig 升级 detection-grade**——已执行（2026-09-08，负结果）：bbox 真值已入 make_dataset.py，CenterNet 风格热点头 + 自包含检测 AP（`scripts/train_detection_synth.py`），20-seed 网格（`runs/detection_synth_results.json`）cerebellum / uniform×3 / oracle 全部 detAP ≤0.015 且 1σ 重合。诊断排除实现 bug（完美预测 AP=1.0 已固化为回归测试）：根因是冻结特征瓶颈——`features[:3]` 在 gt cell 处响应 ≈ 背景（z-score +0.15~0.66），全量 24k 帧上界 train AP 0.56 / **val 0.003**，同分布 train-on-val ceiling 也仅 0.415。检测级信号在 features[:3] 下不存在，backbone 是瓶颈——项 2 的优先级由此上调。
-2. **DINOv2 冻结特征替换 MobileNetV3**——已执行（2026-09-09，**负结果，路线关闭**）：三条子路全部走完——① DINOv2 ViT-S/14（384ch，16px/cell）：触发器 0/40 段触发（patch 量化抖动 + 双线性 warp 对分段常数特征场系统性误预测 → calm 上尾钉死 running sd，事件 z 仅 0.8–1.1；事件帧超 calm p99 仅 8–12% vs MNV3 18–29%），且 per-channel 标准化在该残差管线里是恒等变换（z=err/sd(err) 仿射不变），协议内不可修；② DINOv2 ViT-S/8（同粒度正解）：官方权重已被 Meta 下架（CDN 403，HF/ModelScope 无镜像）；③ DINOv1 ViT-S/8 替代探针：事件区分度恢复（ev99 0.27 vs MNV3 0.23，高分帧锁定事件），但事件激励持续性不足，触发率 **3/40 vs MNV3 11/40**（`runs/trigger_scan_s8.json`，40 段同口径扫描）。结论：residual-trigger 操作点上自监督 ViT patch token 全面不如 2019 年 MobileNetV3 早期层，已发表前端保持最优。附带发现两个既有协议小毛病（与 backbone 无关）：uniform 预算在 cerebellum 掩码为 0 的段塌到每段 1 clip 地板、检测 AP 在 all-zero-peak seed 时整行 NaN——已发表 MNV3 行同样受影响，修订待拍板。
-3. **协议层接口化**——已执行（2026-09-08，验收通过）：`cerebellum_cancel/acquisition.py`，`AcquisitionLayer.step(frame, gyro, t) → {keep, in_clip, surprise, z_map, clips}`，前端可插拔 callable（内置 MobileNetV3 [:3] 与现有提取管线同链），`finalize()` 返片段；`scripts/demo_acquisition.py` 真实 webcam 1950 帧：keep 6 段 / 帧级存储 14.4%，surprise 峰值帧残差热力图叠加确认头发运动区，robust 口径与文档 22 段结论一致。测试 +5（全套 49 passed），pyright 0。
-
-**本轮近期三项已全部结案**（项 1 负结果 / 项 2 负结果路线关闭 / 项 3 验收通过）。合成 regime 上已发表前端（MobileNetV3 features[:3] + 残差触发）保持最优方案地位；backbone 升级与检测级升级两条增强路均以负结果关闭。
-
-**中期（结构补全）**
-
-4. 仲裁级联的真实失效模式验证：构造/采集含 roll、视差、标定误差的数据，测级联否决率——注意前提已收窄：真实数据上 gyro warp 本身不赚残差质量（§0 表 13），级联的价值仅剩下"廉价副本失效时的安全网"，验证时要对着这个收窄后的主张测。
-5. 论文里还没实现的结构：ON/OFF 对抗通道、recurrent 加速（像素路径 cell 间扩散）。
-
-**远期（并入协议栈）**
-
-6. iPhone 实拍——意义更新：真实数据负结果的归因之一是 **SLAM 副本在高运动下退化**（行走段 y 轴标定相关仅 −0.42~−0.59），真机 IMU 没有这个问题；iPhone 实拍不再是"验证通路"而是"检验真 IMU 能否翻转行走级结论"的实验（Sensor Logger 同步方案已在 README）；
-7. 加速器友好化（全部算子都是平移+EMA，理论上可下沉到 ISP/NPU 旁路）；
-8. 真实数据正向用法探索：语义重要性筛选已确认越出定义域，但"运动去重/带宽预筛"（剪掉自运动可解释的冗余片段）仍是成本账成立的用途，可在协议层 demo（近期 3）里一并验证。
-9. **推理期守门**——已执行（2026-09-12，**定义域边界 + 一个真缺陷修复**）：见 §2.3.8 / §2.3.9。守门在真实数据上输给随机撒帧（2% 预算 0.464 vs 0.782），≤2% 预算下 onset 捕获 0.000；同时发现并修好 `AdaptiveTrigger` 的闸门锁死缺陷（2/10 → 0/10，`runs/diag_gate_lock.json`、`runs/diag_gate_vs_random.json`、`tests/test_gate_stats.py`）。**守门线就此关闭**——需要守门的下游要在视觉模型侧另找信号源。
-10. **守门线的"临终检查"**——已执行（2026-09-12，**定义域边界，这条线正式结案**）：见 §2.3.8。① 排掉了"目标定错"这个结构性解释——把目标从整个标注区间换成 onset/offset/bounds 转折时刻，4 种目标 × 6 种信号共 **24 格无一显著**（最佳 p=0.11），且残差打不赢最笨的"特征图逐帧差"（5/10 段，p=1.0）；② 量出了**约束的代价**——允许用标注、同一场景下上界也只有 **AUC 0.589**，跨场景 **0.478（低于随机）**。结论：**"事何时发生"不在残差这个量的定义域里**——不是监督粒度不够，而是量纲不对：三条独立证据（跨场景低于随机、时序通道零增量、打不赢原始差分）指向同一处。**所以它不值得再试，而不是"数据不够"**——换更细的标注不会改变那三条。
-
-**多模态数据集（正向交付层）——已执行（2026-09-12）**：见 §4.2。单点主张一个个被否证后，把**跨 regime 成立**的资产（0.033 ms 副本、0.17 ms 整层、决策无损、续采等价、完整性哨兵）收成一个可交付容器：`cerebellum_cancel/dataset.py` + `integrity.py`，schema `cmci-dataset-1`。
-
-* **唯一硬契约**：逐帧对齐——所有载荷第 0 维 = 同一时间轴帧索引 = `n_frames`（写入与**读回**都校验）；`score` 必须 float64（决策无损）。
-* **三样交付**：①模态对齐的可训练样本；②每帧 `weight`（残余不可压缩性，用于**均衡难度采样**，不是重要性排序）；③每段 `integrity`（采集链路完整性标记）。
-* **已构建**：`data/cmci_ds_aoe_event`，10 段 / 36,782 帧 / 0.9 MB（frames=none，源数据未留帧）。
-* **诚实标注**：`weight` 是**未验证主张**，manifest 与自动生成的 README 都标 `CLAIM, NOT ESTABLISHED`，判据脚本 `scripts/eval_weight_value.py` **尚未执行**。
-* **本轮踩坑固化**（全部有回归测试）：keep 不能用启发式阈值（早先用中位数得到恰好 50%）；完整性输入必须用**未归一化残差**；基准不能只用开头固定窗口（seq_000 开头恰是安静期 → 干净数据报 725 个假尖峰）；不能用绝对 σ 下限（重尾数据上 8σ 是常见值）；**不能跨段借参照**（帧索引跨段无意义）。
-* **已知检出下限**：稀疏故障会落在 10% 参照集内被当成"正常"（实测注入 5 个 40× 尖峰全部漏检）——哨兵只能做**录制级粗筛查**，与 LABEL_AUDIT §5b"约需 40% 覆盖"同源。
-
-**记录格式 v2 与层数实验**——已并入 §4.1（前者是落盘层设计，后者是
-`cerebellum_cancel/cascade.py` 的层数负结果）。此处不再重复。
-
-**真机 IMU（非替身）——首个正结果（2026-09-11，已执行）**
-
-§5.2 边界 5 一直挂着"真 gyro 通路未验证"：此前**全部**真实数据的 gyro 都是
-替身（Open-AoE 用 SLAM 轨迹差分），而那条链路把 SLAM 的失效模式继承给了
-"副本"，行走级 probe（§0.4 表 13）正把"gyro warp 不赚"的归因之一指向副本
-质量。本轮取 Galaxy S21 手持真机数据（HF 镜像
-`simorautiainen/moving-in-messy-apartment-video-with-imu`，500 帧 / 17.9 s，
-纳秒时间戳、帧间隔抖动 74%），用 DIS 光流自标定（单位 rad/s、FOV≈36°、
-f_map=42.67），得到：
-
-| 项                                          | 读数                                         |
-| ------------------------------------------- | -------------------------------------------- |
-| 副本质量（预测位移 vs 实测位移）            | **r = +0.958、R² = 0.87**（历史最好） |
-| naive 全帧残差                              | 0.3704                                       |
-| gyro + tan 近似平移（**管线原方法**） | 0.4846（**1.308×**，帮倒忙）          |
-| gyro + 完整旋转矩阵（含 roll）              | **0.3246（0.876×，降低 12.4%）**      |
-| flow（DIS）                                 | 0.2440（0.659×，但贵 30 倍）                |
-
-**结论翻转**：同一份真 gyro，**换 warp 实现就把结论从"帮倒忙"翻成"降残差"**。
-逐像素对照更极端（最强旋转 100 帧对）：tan 近似 1.433× vs 完整旋转 0.614×。
-原因是两条可独立验证的模型缺陷：① **roll 完全未建模**（本段 p95 = 45 deg/s）；
-② **常数平移近似在视野边缘失效**（旋转的位移场是线性/二次的，常数近似误差
-正比于离中心的距离）。
-
-> **可复现性（补记，重要）**：上表**绝对残差已无法用当前代码复现**——重跑得
-> naive `0.3945`、shift `1.364×`、rotation `0.835×`。naive 也变了（+6.5%），
-> 而 naive 不依赖任何被改动的代码（不涉及 `f_map`、不涉及 warp），已排除帧内容
-> （md5 完全一致）/尺寸（224/256/192/160）/灰度/CPU-MPS/帧数（350–500）/
-> `f_map`（42.674 与 43.13）等假设，**未能定位到来源**。
-> **稳定的是量级与方向**：三个方法的顺序、符号、相对幅度在两套读数下完全一致
-> （shift ~1.3–1.4×、rotation ~0.84–0.88×、flow ~0.61–0.66×）。**引用请用 ratio，
-> 不要引用绝对残差的小数点后四位。**
-
-**时序/符号/方向约定（三个真实的坑，见 §4.1 引用的格式文档）**：① 预测 `F_t`
-要用**描述该段位移**的读数，但这个配对**逐数据集不同**（真机 lag=1、AoE
-lag=0，由 `rotwarp.lag_for` 声明）；② `warpPerspective` **必须带
-`WARP_INVERSE_MAP`**，否则预测被反向 warp——效果从降残差变增残差，且**只看
-残差数值发现不了**（本轮被它连续误导两轮）；③ **符号与 flag 是联合约定**
-（`(-s, 有 flag) ≡ (+s, 无 flag)`），补 flag 后符号必须整体取反。
-
-实现：`cerebellum_cancel/rotwarp.py` + `CancelConfig.pred="rotation"`
-（**默认仍为 `"shift"`，已发布数字不变**）。实测口径同时给出方法无关的
-`full_frame`（主口径）与"用各方法自己的 surprise 选 calm 帧"的旧口径——
-后者存在循环选择（naive 选出 7.1% 的帧、rotation 8.4%），跨方法比较不可用。
-
-**AoE 交叉验证——两个独立实现的分歧已解决（`scripts/run_rotwarp_aoe.py`）**
-
-读数要在**与已发布负结果相同的数据**上复核时，出现了两个互斥读数：
-
-| 来源                                  | 口径                                      | 读数             |
-| ------------------------------------- | ----------------------------------------- | ---------------- |
-| 既有 `scripts/analyze_negatives.py` | n≤1500，前半标定符号，**后半评估** | +4.65%，12/12 段 |
-| 新写 `scripts/run_rotwarp_aoe.py`   | **全序列** n=600，固定符号          | +2.06%，9/12 段  |
-
-逐位对齐实现后，**根因是评估窗口，不是实现**（官方脚本 `--n 1500` 现在
-**同时打印两个窗口**，并落盘在 `summary.window_sensitivity`）：
-
-| 口径（同一实现、同一符号）          | ratio       | 更好段数        | p               |
-| ----------------------------------- | ----------- | --------------- | --------------- |
-| A**全序列** n=1500            | 0.977       | 9/12            | 0.146           |
-| B 同一跑的**后半窗口**        | 0.970       | **11/12** | **0.006** |
-| C 前半标定符号→后半评估（n≤1500） | +4.63% 增益 | 11/12           | 0.006           |
-
-**A→B（换窗口）就把 p 从 0.146 推到 0.006；B→C（标符号）只差 0.08pp。**
-即**显著性很大程度上由"在哪些帧上评"决定**。按 C 口径重跑我的实现可逐段复现
-既有 JSON（12 段均值 +4.63% vs +4.65%，最大偏差 0.32pp）——**两者是同一个
-计算，不是两次独立验证**。
-
-收益是**真运动补偿**，不是插值平滑伪影：把 gyro 时间轴打乱得 −6.26%、所有轴
-符号取反得 −6.53%，而正向 **+4.46%**——**正/反不对称（差 11pp）本身就证明
-方向系统性正确**；纯高斯模糊（不用 IMU）最好只有 +0.06%。见
-`scripts/control_aoe_gain.py`。
-
-**机制量**：AoE 每帧网格位移 p95 = 0.596 格，真机段 2.818 格（差 4.7 倍）。
-但**逐帧穷举最优平移（oracle）**（`scripts/oracle_aoe_shift.py`，不用任何
-估计器）显示可得收益比拿到的多得多：
-
-| 时间窗       | gyro 实现 | oracle 上界 | corr(gyro, oracle) |
-| ------------ | --------- | ----------- | ------------------ |
-| t 1–500     | +1.56%    | +4.79%      | +0.454             |
-| t 500–1000  | +2.65%    | +5.22%      | +0.432             |
-| t 1000–1500 | +1.43%    | +6.20%      | +0.447             |
-
-**gyro 确有解释力**（yaw 轴相关 +0.43~+0.45，三窗一致）；此前用相位相关测出的
-"相关≈0"是 28×28 图上 0.2px 位移的**估计器噪声**。且 **gyro 只兑现了约 1/3 的
-可得收益**——瓶颈是**模型缺平移项**（手持行走的平移未被 `trans_scale` 之外
-建模），不是"数据运动太小"。这是当前最大的未兑现收益。
-
-**三个约定缺陷（本轮挖出的真实 bug，时序/符号/方向约定）**：① `warpPerspective` 漏了
-`WARP_INVERSE_MAP`，导致预测被**反向** warp——效果从降残差变增残差，且**只看
-残差数值发现不了**，本轮被它连续误导两轮；② **符号与 flag 是联合约定**
-（`(-s, 有 flag) ≡ (+s, 无 flag)`），补 flag 后两个数据源的符号都必须整体
-取反（真机 `(+,+,+)`→`(-,-,-)`，误写会让残差从 0.835 变 1.289）；③ 两个
-`prep_*` 的标定目标相反。教训：**用相关系数标定符号必须有绝对参照**，且
-配对（`lag`）**逐数据集不同**（真机 lag=1、AoE lag=0），不能全局取值。
-
-边界照记：**单段单设备**（真机段 17.9 s、室内手持），是数据点不是分布结论；
-其**绝对残差不可复现**（naive 0.3704→0.3945，naive 不依赖任何被改动的代码，
-已排除帧内容/尺寸/设备/帧数/`f_map` 等假设），但**两套读数下三个方法的相对
-幅度完全一致**，故结论以 ratio 为准。另外 `data/aoe_event/val/seq_007` 与
-`data/aoe_motion/val/seq_001` **md5 完全相同**（"12 段"实为 11 段独立）。
-真机段无事件标注故不报 recall。
-
----
-
-## §4.5 `rotwarp` 的输入契约（本模块最该有的那一层）
+### §4.5 `rotwarp` 的输入契约（本模块最该有的那一层）
 
 `rotwarp` 是全项目**约定最密**的模块：时序（`lag`）、符号（`signs`）、方向
 （`WARP_INVERSE_MAP`）三个约定叠在一起，而 GUIDE 自己就记着这里的坑
@@ -1444,7 +1245,7 @@ PYTHONPATH=. .venv/bin/python scripts/build_dataset.py \
 
 ---
 
-## §4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
+### §4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
 
 `pipeline.run_pipeline` 是**编排层**（吃路径、转发给下层），它的失效模式与
 逐帧模块不同：**参数写错不会崩，只会安静地改变语义**。实测三类静默通过：
@@ -1475,7 +1276,7 @@ print(r.n_frames, len(r.clips))   # 1950 4（与加校验前一致）
 
 ---
 
-## §4.7 自动化兜底：让前六节不退化
+### §4.7 自动化兜底：让前六节不退化
 
 §4.1–4.6 建立的所有保障，**只有在每次改动后都真的跑过才有意义**。此前这些
 步骤散在人的记忆里（"记得跑 pytest、记得跑 pyright、改了 GUIDE 记得重建
@@ -1685,7 +1486,7 @@ make pdf            # 只重建 + 自检 PDF
 
 ---
 
-## §4.8 引擎与 CLI：把零件接成"塞数据进去、出数据集"
+### §4.8 引擎与 CLI：把零件接成"塞数据进去、出数据集"
 
 §4.1–4.7 造的都是**零件**（落盘格式、数据集容器、完整性哨兵、契约、门禁）。
 这一节把它们接成一条能直接用的线。
@@ -1862,7 +1663,7 @@ AssertionError: UI 的 n_segments=999 与引擎的 0 不一致——前端是不
 
 ---
 
-## §4.9 没有 IMU 怎么办：先调研，再决定不做什么
+### §4.9 没有 IMU 怎么办：先调研，再决定不做什么
 
 真实数据经常没有 IMU：老手机、网络视频、屏幕录制、IMU 丢包。这一节回答两个问题：
 **有没有现成轮子**，以及**没有 IMU 时该做什么**。
@@ -1958,7 +1759,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/test_visual_motion.py -q  # 15 pas
 
 ---
 
-## §4.10 `io.py`：最后一个没有契约的模块（也是最该有的那个）
+### §4.10 `io.py`：最后一个没有契约的模块（也是最该有的那个）
 
 §4.4–4.9 逐个加固了 `core` / `integrity` / `adapter` / `rotwarp` / `pipeline` /
 `visual_motion`，但 `io.py` 一直漏着——而它是 **I/O 边界**，也就是脏数据进入整条
@@ -2012,3 +1813,175 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/ -q              # 288 passed
 ---
 
 *最后更新：2026-09-12。实验数字以 manifest.json 指向的最新结果文件为准；每个数字的复现命令随之所在章节给出。*
+
+## §5 证据索引与路线图
+
+### 5.1 证据索引
+
+所有数据集、结果 JSON、图表、日志的完整索引（路径、生成脚本、头指标）见 **[manifest.json](manifest.json)**。关键结果文件：
+
+- `runs/downstream_results.json` — 下游训练对比（合成 rig）：cerebellum 3.4% 存储 / AP 0.298 / evRec@10 0.96 vs uniform 4x 预算 / AP 0.145 / evRec@10 0.69 vs oracle
+- `runs/trans_eval_data_aoe_motion_val.json` — 平移项负结果（`scripts/run_trans_eval.py`）：常深度均匀平移 warp 比纯旋转更差（0.0901 → 0.0938），模型类错误非标定可修
+- `runs/downstream_aoe_results.json` — 真实数据下游价值旧版（`scripts/train_downstream_aoe.py`，9 段单 split）：合成优势未迁移；已被 `runs/downstream_aoe_cv.json` 的 105 轮版本取代
+- `runs/downstream_aoe_cv.json` — 真实数据下游价值稳健版（`scripts/run_downstream_aoe_cv.py`，12 段 3-fold × 35 seed = 105 轮/方法，9 类动词）：cerebellum 0.162±0.077 vs uniform 1x 0.173±0.082 vs oracle 0.164±0.088，全部 1σ 重合——"未迁移"有统计支撑
+- `runs/downstream_event_results.json` — 稀疏物理事件 regime 检验（`scripts/train_downstream_event.py`，5 段 drop/throw/toss/break，LOO × 25 seed = 125 轮/方法）：oracle（12.4% 存储）0.204±0.149 明显最优，cerebellum（43.4%）与 uniform 1x 打平——主场 regime 假设未确认（§2.3.7）
+- `runs/detection_synth_results.json` — 检测级下游对比（`scripts/train_detection_synth.py`，CenterNet 风格热点头 + 检测 AP，20 seeds）：cerebellum 3.4% 存储 AP 0.005±0.009 vs uniform(1x) 0.015±0.030 vs oracle 0.002±0.003，全方法噪声级且 1σ 重合——评估经完美预测 AP=1.0 回归守住（`tests/test_detection_synth.py`），根因是冻结特征瓶颈：MobileNetV3 `features[:3]` 对平坦 blob 几乎无响应（`scripts/diag_detection_rig.py` / `scripts/diag_upper_bound.py`，图 `runs/diag_*.png`；全量 24k 帧上界 train AP 0.56 / val 0.003，同分布 train-on-val ceiling 仅 0.415）。检测级信号在 features[:3] 下不存在，backbone 替换（路线图项 2）优先级上调
+- `runs/trigger_scan_s8.json` — backbone 替换路线（路线图项 2）关闭判决（`scripts/run_trigger_scan_s8.py`，40 训练段同口径双 backbone 触发扫描）：DINOv1 ViT-S/8 触发 3/40 段 vs MNV3 11/40——patch token 事件区分度足够（ev99 0.27 vs 0.23）但激励持续性不足（z_ema 峰值卡在门限 6 下）。此前 DINOv2 S/14 帧级/检测级对比（`runs/downstream_dino.json` / `runs/detection_synth_dino_results.json`）因 S/14 触发 0 段全面退化（uniform 行 detAP 甚至 NaN），诊断见 `scripts/diag_dino_trigger*.py`：S/14 高分帧全是非事件 patch 量化毛刺，且 per-channel 标准化在残差管线内是恒等变换，协议内不可修；DINOv2 S/8 官方权重已下架
+- `runs/downstream_dino.json` / `runs/detection_synth_dino_results.json` — DINOv2 S/14 双对比原始输出（20 seeds）：帧级 uniform 5.2% 存储 AP 0.196 / evRec@10 0.79（cerebellum/oracle 因 0 触发无信息量）；检测级 uniform 行 detAP NaN（all-zero-peak seed 的既有汇总脆性）。仅 uniform 行有效，供存档参照
+- `runs/raft_eval_data_dataset_val.json` / `runs/raft_eval_data_aoe_motion_val.json` — RAFT 光流上限对照（`scripts/run_raft_eval.py`）：合成 val 5 段 RAFT 0.1054 ≈ DIS 0.1056；真实高运动 2 段 RAFT 0.0544 vs DIS 0.0522；RAFT 慢 ~20 倍
+- `runs/portable_check.json` — CPU vs MPS 可移植性（`scripts/run_portable_check.py`）：特征最大相对差 2e-6、下游残差差 3.7e-9；backbone 1.76 ms (CPU) vs 1.06 ms (MPS)
+- `runs/flow_eval_motion.json` — 真实高运动 224px（naive 0.080 / gyro 0.090 / flow 0.052）；`runs/flow_eval_motion448.json` — 同对片段 448px 交叉（0.0535 / 0.0614 / 0.0684，设计规则未迁移）；`runs/flow_eval_synth448.json` — 合成 448px（分辨率收益 -58% 的参照）；`runs/flow_eval_event.json` — 事件 5 段质量基线（DIS 8.18 ms、gyro shift 0.033 ms、flow step 6.40 ms/帧）
+- `runs/flow_eval.json` — `run_flow_eval.py` 的最近一次输出（每次运行覆盖；历史运行均已按上表备份为独立文件）
+- `runs/arbiter_eval_aoe9.json` — 仲裁级联 n=9 桌面段（140 候选 run/段、否决 8–31%、stored 0.89→0.72、evRec 1.00→0.94）；`runs/arbiter_eval.json` — 同脚本的高运动对运行（91 run/段、stored 0.91→0.76、摊销 0.58 ms/帧）
+- `runs/aoe_peaks/` — 真实数据残差峰值帧（快速手部运动 + 运动模糊，AUC 0.47 反相关的视觉证据）
+- `data/aoe_src/` — Open-AoE 原始 segment（含 SLAM 轨迹与原子动作标注，来源 hf-mirror inclusionAI/OpenAoE-2000h；由 scripts/fetch_aoe.py 按场景/动作多样性选取）；`data/aoe_event/` — 事件型片段 5 段（verb ∈ {drop,throw,toss,break}，`scripts/prep_aoe.py --event-verbs` 导出事件区间）
+
+### 5.2 当前边界（实测，非推测）
+
+1. 合成 rig 上全流程成立；真实 egocentric 视频上触发已恢复（robust 统计），已在 12 个跨场景 segment 上复现，且行走级 probe 已测（4 段 p95 71–75°/s，§0 表第 13 行）：gyro warp 在行走级 3/4 段比 naive 更差——真实数据的残差质量优势不随运动增大而兑现，反而被模型类误差（平移/视差/滚动快门）和 SLAM 副本退化双重放大；
+2. gyro warp 的收益被分辨率门控，但这条设计规则只在合成数据上成立（实测三档输入：验证集平静残差收益 -41%/-52%/-58%，未饱和；桌面级自运动在 224 px 下物理中性（亚像素）。448 px 真实高运动交叉（`runs/flow_eval_motion448.json`）证伪了向真实的迁移：gyro 依然帮倒忙（+15%），光流逐段翻转——真实数据的损伤由纯旋转模型看不见的成分主导（平移/视差、滚动快门），分辨率修估计器误差、修不了模型类误差。平移项已实测补过：常深度均匀 warp 是负收益（§2.3.5），要补平移就得带深度结构；roll 未建模仍是次级缺口；
+3. 光流仲裁级联的价值（结构保险）尚未在真实失效模式（roll/视差/大标定误差）上兑现；
+4. 真实数据上的"值不值"已测到 105–250 轮精度（§2.3.6/§2.3.7，均为**定义域边界**）：合成优势不迁移到稠密语义任务；稀疏事件 regime 主场检验 10 段 250 轮确认 cerebellum ≈ uniform；追测排除了"自运动没分离干净"的归因（真值平移在区间内外都是负收益），读出端升级也确认 z 图幅度与空间模式零事件信号（三种存储方法 AP 逐位相同）。**"用相机侧残差去回答世界侧语义问题"在真实 egocentric 数据上从预测、建模、读出、时间定位四个方向全部越出定义域**；该 binary 任务本身的 oracle 上限也不高（0.144±0.128）；
+5. 真 gyro 通路（iPhone 实拍）未验证；SLAM 轨迹是替身，且在低纹理/快速运动时 SLAM 自身失效——两种失败模式要分开看。
+
+### 5.3 路线图
+
+上一轮近期三项（读出端升级 / 行走级 probe / 价值收敛）已全部执行完毕：1 负结果（§2.3.7 追测④），2 负结果（§0 表第 13 行），3 已写入 §2.3.7 收敛段。真实数据价值线收敛后，火力转回已成立的合成 regime 与协议层工程化。
+
+**近期（2026-09-07 新一轮）**
+
+1. **合成 rig 升级 detection-grade**——已执行（2026-09-08，负结果）：bbox 真值已入 make_dataset.py，CenterNet 风格热点头 + 自包含检测 AP（`scripts/train_detection_synth.py`），20-seed 网格（`runs/detection_synth_results.json`）cerebellum / uniform×3 / oracle 全部 detAP ≤0.015 且 1σ 重合。诊断排除实现 bug（完美预测 AP=1.0 已固化为回归测试）：根因是冻结特征瓶颈——`features[:3]` 在 gt cell 处响应 ≈ 背景（z-score +0.15~0.66），全量 24k 帧上界 train AP 0.56 / **val 0.003**，同分布 train-on-val ceiling 也仅 0.415。检测级信号在 features[:3] 下不存在，backbone 是瓶颈——项 2 的优先级由此上调。
+2. **DINOv2 冻结特征替换 MobileNetV3**——已执行（2026-09-09，**负结果，路线关闭**）：三条子路全部走完——① DINOv2 ViT-S/14（384ch，16px/cell）：触发器 0/40 段触发（patch 量化抖动 + 双线性 warp 对分段常数特征场系统性误预测 → calm 上尾钉死 running sd，事件 z 仅 0.8–1.1；事件帧超 calm p99 仅 8–12% vs MNV3 18–29%），且 per-channel 标准化在该残差管线里是恒等变换（z=err/sd(err) 仿射不变），协议内不可修；② DINOv2 ViT-S/8（同粒度正解）：官方权重已被 Meta 下架（CDN 403，HF/ModelScope 无镜像）；③ DINOv1 ViT-S/8 替代探针：事件区分度恢复（ev99 0.27 vs MNV3 0.23，高分帧锁定事件），但事件激励持续性不足，触发率 **3/40 vs MNV3 11/40**（`runs/trigger_scan_s8.json`，40 段同口径扫描）。结论：residual-trigger 操作点上自监督 ViT patch token 全面不如 2019 年 MobileNetV3 早期层，已发表前端保持最优。附带发现两个既有协议小毛病（与 backbone 无关）：uniform 预算在 cerebellum 掩码为 0 的段塌到每段 1 clip 地板、检测 AP 在 all-zero-peak seed 时整行 NaN——已发表 MNV3 行同样受影响，修订待拍板。
+3. **协议层接口化**——已执行（2026-09-08，验收通过）：`cerebellum_cancel/acquisition.py`，`AcquisitionLayer.step(frame, gyro, t) → {keep, in_clip, surprise, z_map, clips}`，前端可插拔 callable（内置 MobileNetV3 [:3] 与现有提取管线同链），`finalize()` 返片段；`scripts/demo_acquisition.py` 真实 webcam 1950 帧：keep 6 段 / 帧级存储 14.4%，surprise 峰值帧残差热力图叠加确认头发运动区，robust 口径与文档 22 段结论一致。测试 +5（全套 49 passed），pyright 0。
+
+**本轮近期三项已全部结案**（项 1 负结果 / 项 2 负结果路线关闭 / 项 3 验收通过）。合成 regime 上已发表前端（MobileNetV3 features[:3] + 残差触发）保持最优方案地位；backbone 升级与检测级升级两条增强路均以负结果关闭。
+
+**中期（结构补全）**
+
+4. 仲裁级联的真实失效模式验证：构造/采集含 roll、视差、标定误差的数据，测级联否决率——注意前提已收窄：真实数据上 gyro warp 本身不赚残差质量（§0 表 13），级联的价值仅剩下"廉价副本失效时的安全网"，验证时要对着这个收窄后的主张测。
+5. 论文里还没实现的结构：ON/OFF 对抗通道、recurrent 加速（像素路径 cell 间扩散）。
+
+**远期（并入协议栈）**
+
+6. iPhone 实拍——意义更新：真实数据负结果的归因之一是 **SLAM 副本在高运动下退化**（行走段 y 轴标定相关仅 −0.42~−0.59），真机 IMU 没有这个问题；iPhone 实拍不再是"验证通路"而是"检验真 IMU 能否翻转行走级结论"的实验（Sensor Logger 同步方案已在 README）；
+7. 加速器友好化（全部算子都是平移+EMA，理论上可下沉到 ISP/NPU 旁路）；
+8. 真实数据正向用法探索：语义重要性筛选已确认越出定义域，但"运动去重/带宽预筛"（剪掉自运动可解释的冗余片段）仍是成本账成立的用途，可在协议层 demo（近期 3）里一并验证。
+9. **推理期守门**——已执行（2026-09-12，**定义域边界 + 一个真缺陷修复**）：见 §2.3.8 / §2.3.9。守门在真实数据上输给随机撒帧（2% 预算 0.464 vs 0.782），≤2% 预算下 onset 捕获 0.000；同时发现并修好 `AdaptiveTrigger` 的闸门锁死缺陷（2/10 → 0/10，`runs/diag_gate_lock.json`、`runs/diag_gate_vs_random.json`、`tests/test_gate_stats.py`）。**守门线就此关闭**——需要守门的下游要在视觉模型侧另找信号源。
+10. **守门线的"临终检查"**——已执行（2026-09-12，**定义域边界，这条线正式结案**）：见 §2.3.8。① 排掉了"目标定错"这个结构性解释——把目标从整个标注区间换成 onset/offset/bounds 转折时刻，4 种目标 × 6 种信号共 **24 格无一显著**（最佳 p=0.11），且残差打不赢最笨的"特征图逐帧差"（5/10 段，p=1.0）；② 量出了**约束的代价**——允许用标注、同一场景下上界也只有 **AUC 0.589**，跨场景 **0.478（低于随机）**。结论：**"事何时发生"不在残差这个量的定义域里**——不是监督粒度不够，而是量纲不对：三条独立证据（跨场景低于随机、时序通道零增量、打不赢原始差分）指向同一处。**所以它不值得再试，而不是"数据不够"**——换更细的标注不会改变那三条。
+
+**多模态数据集（正向交付层）——已执行（2026-09-12）**：见 §4.2。单点主张一个个被否证后，把**跨 regime 成立**的资产（0.033 ms 副本、0.17 ms 整层、决策无损、续采等价、完整性哨兵）收成一个可交付容器：`cerebellum_cancel/dataset.py` + `integrity.py`，schema `cmci-dataset-1`。
+
+* **唯一硬契约**：逐帧对齐——所有载荷第 0 维 = 同一时间轴帧索引 = `n_frames`（写入与**读回**都校验）；`score` 必须 float64（决策无损）。
+* **三样交付**：①模态对齐的可训练样本；②每帧 `weight`（残余不可压缩性，用于**均衡难度采样**，不是重要性排序）；③每段 `integrity`（采集链路完整性标记）。
+* **已构建**：`data/cmci_ds_aoe_event`，10 段 / 36,782 帧 / 0.9 MB（frames=none，源数据未留帧）。
+* **诚实标注**：`weight` 是**未验证主张**，manifest 与自动生成的 README 都标 `CLAIM, NOT ESTABLISHED`，判据脚本 `scripts/eval_weight_value.py` **尚未执行**。
+* **本轮踩坑固化**（全部有回归测试）：keep 不能用启发式阈值（早先用中位数得到恰好 50%）；完整性输入必须用**未归一化残差**；基准不能只用开头固定窗口（seq_000 开头恰是安静期 → 干净数据报 725 个假尖峰）；不能用绝对 σ 下限（重尾数据上 8σ 是常见值）；**不能跨段借参照**（帧索引跨段无意义）。
+* **已知检出下限**：稀疏故障会落在 10% 参照集内被当成"正常"（实测注入 5 个 40× 尖峰全部漏检）——哨兵只能做**录制级粗筛查**，与 LABEL_AUDIT §5b"约需 40% 覆盖"同源。
+
+**记录格式 v2 与层数实验**——已并入 §4.1（前者是落盘层设计，后者是
+`cerebellum_cancel/cascade.py` 的层数负结果）。此处不再重复。
+
+**真机 IMU（非替身）——首个正结果（2026-09-11，已执行）**
+
+§5.2 边界 5 一直挂着"真 gyro 通路未验证"：此前**全部**真实数据的 gyro 都是
+替身（Open-AoE 用 SLAM 轨迹差分），而那条链路把 SLAM 的失效模式继承给了
+"副本"，行走级 probe（§0.4 表 13）正把"gyro warp 不赚"的归因之一指向副本
+质量。本轮取 Galaxy S21 手持真机数据（HF 镜像
+`simorautiainen/moving-in-messy-apartment-video-with-imu`，500 帧 / 17.9 s，
+纳秒时间戳、帧间隔抖动 74%），用 DIS 光流自标定（单位 rad/s、FOV≈36°、
+f_map=42.67），得到：
+
+| 项                                          | 读数                                         |
+| ------------------------------------------- | -------------------------------------------- |
+| 副本质量（预测位移 vs 实测位移）            | **r = +0.958、R² = 0.87**（历史最好） |
+| naive 全帧残差                              | 0.3704                                       |
+| gyro + tan 近似平移（**管线原方法**） | 0.4846（**1.308×**，帮倒忙）          |
+| gyro + 完整旋转矩阵（含 roll）              | **0.3246（0.876×，降低 12.4%）**      |
+| flow（DIS）                                 | 0.2440（0.659×，但贵 30 倍）                |
+
+**结论翻转**：同一份真 gyro，**换 warp 实现就把结论从"帮倒忙"翻成"降残差"**。
+逐像素对照更极端（最强旋转 100 帧对）：tan 近似 1.433× vs 完整旋转 0.614×。
+原因是两条可独立验证的模型缺陷：① **roll 完全未建模**（本段 p95 = 45 deg/s）；
+② **常数平移近似在视野边缘失效**（旋转的位移场是线性/二次的，常数近似误差
+正比于离中心的距离）。
+
+> **可复现性（补记，重要）**：上表**绝对残差已无法用当前代码复现**——重跑得
+> naive `0.3945`、shift `1.364×`、rotation `0.835×`。naive 也变了（+6.5%），
+> 而 naive 不依赖任何被改动的代码（不涉及 `f_map`、不涉及 warp），已排除帧内容
+> （md5 完全一致）/尺寸（224/256/192/160）/灰度/CPU-MPS/帧数（350–500）/
+> `f_map`（42.674 与 43.13）等假设，**未能定位到来源**。
+> **稳定的是量级与方向**：三个方法的顺序、符号、相对幅度在两套读数下完全一致
+> （shift ~1.3–1.4×、rotation ~0.84–0.88×、flow ~0.61–0.66×）。**引用请用 ratio，
+> 不要引用绝对残差的小数点后四位。**
+
+**时序/符号/方向约定（三个真实的坑，见 §4.1 引用的格式文档）**：① 预测 `F_t`
+要用**描述该段位移**的读数，但这个配对**逐数据集不同**（真机 lag=1、AoE
+lag=0，由 `rotwarp.lag_for` 声明）；② `warpPerspective` **必须带
+`WARP_INVERSE_MAP`**，否则预测被反向 warp——效果从降残差变增残差，且**只看
+残差数值发现不了**（本轮被它连续误导两轮）；③ **符号与 flag 是联合约定**
+（`(-s, 有 flag) ≡ (+s, 无 flag)`），补 flag 后符号必须整体取反。
+
+实现：`cerebellum_cancel/rotwarp.py` + `CancelConfig.pred="rotation"`
+（**默认仍为 `"shift"`，已发布数字不变**）。实测口径同时给出方法无关的
+`full_frame`（主口径）与"用各方法自己的 surprise 选 calm 帧"的旧口径——
+后者存在循环选择（naive 选出 7.1% 的帧、rotation 8.4%），跨方法比较不可用。
+
+**AoE 交叉验证——两个独立实现的分歧已解决（`scripts/run_rotwarp_aoe.py`）**
+
+读数要在**与已发布负结果相同的数据**上复核时，出现了两个互斥读数：
+
+| 来源                                  | 口径                                      | 读数             |
+| ------------------------------------- | ----------------------------------------- | ---------------- |
+| 既有 `scripts/analyze_negatives.py` | n≤1500，前半标定符号，**后半评估** | +4.65%，12/12 段 |
+| 新写 `scripts/run_rotwarp_aoe.py`   | **全序列** n=600，固定符号          | +2.06%，9/12 段  |
+
+逐位对齐实现后，**根因是评估窗口，不是实现**（官方脚本 `--n 1500` 现在
+**同时打印两个窗口**，并落盘在 `summary.window_sensitivity`）：
+
+| 口径（同一实现、同一符号）          | ratio       | 更好段数        | p               |
+| ----------------------------------- | ----------- | --------------- | --------------- |
+| A**全序列** n=1500            | 0.977       | 9/12            | 0.146           |
+| B 同一跑的**后半窗口**        | 0.970       | **11/12** | **0.006** |
+| C 前半标定符号→后半评估（n≤1500） | +4.63% 增益 | 11/12           | 0.006           |
+
+**A→B（换窗口）就把 p 从 0.146 推到 0.006；B→C（标符号）只差 0.08pp。**
+即**显著性很大程度上由"在哪些帧上评"决定**。按 C 口径重跑我的实现可逐段复现
+既有 JSON（12 段均值 +4.63% vs +4.65%，最大偏差 0.32pp）——**两者是同一个
+计算，不是两次独立验证**。
+
+收益是**真运动补偿**，不是插值平滑伪影：把 gyro 时间轴打乱得 −6.26%、所有轴
+符号取反得 −6.53%，而正向 **+4.46%**——**正/反不对称（差 11pp）本身就证明
+方向系统性正确**；纯高斯模糊（不用 IMU）最好只有 +0.06%。见
+`scripts/control_aoe_gain.py`。
+
+**机制量**：AoE 每帧网格位移 p95 = 0.596 格，真机段 2.818 格（差 4.7 倍）。
+但**逐帧穷举最优平移（oracle）**（`scripts/oracle_aoe_shift.py`，不用任何
+估计器）显示可得收益比拿到的多得多：
+
+| 时间窗       | gyro 实现 | oracle 上界 | corr(gyro, oracle) |
+| ------------ | --------- | ----------- | ------------------ |
+| t 1–500     | +1.56%    | +4.79%      | +0.454             |
+| t 500–1000  | +2.65%    | +5.22%      | +0.432             |
+| t 1000–1500 | +1.43%    | +6.20%      | +0.447             |
+
+**gyro 确有解释力**（yaw 轴相关 +0.43~+0.45，三窗一致）；此前用相位相关测出的
+"相关≈0"是 28×28 图上 0.2px 位移的**估计器噪声**。且 **gyro 只兑现了约 1/3 的
+可得收益**——瓶颈是**模型缺平移项**（手持行走的平移未被 `trans_scale` 之外
+建模），不是"数据运动太小"。这是当前最大的未兑现收益。
+
+**三个约定缺陷（本轮挖出的真实 bug，时序/符号/方向约定）**：① `warpPerspective` 漏了
+`WARP_INVERSE_MAP`，导致预测被**反向** warp——效果从降残差变增残差，且**只看
+残差数值发现不了**，本轮被它连续误导两轮；② **符号与 flag 是联合约定**
+（`(-s, 有 flag) ≡ (+s, 无 flag)`），补 flag 后两个数据源的符号都必须整体
+取反（真机 `(+,+,+)`→`(-,-,-)`，误写会让残差从 0.835 变 1.289）；③ 两个
+`prep_*` 的标定目标相反。教训：**用相关系数标定符号必须有绝对参照**，且
+配对（`lag`）**逐数据集不同**（真机 lag=1、AoE lag=0），不能全局取值。
+
+边界照记：**单段单设备**（真机段 17.9 s、室内手持），是数据点不是分布结论；
+其**绝对残差不可复现**（naive 0.3704→0.3945，naive 不依赖任何被改动的代码，
+已排除帧内容/尺寸/设备/帧数/`f_map` 等假设），但**两套读数下三个方法的相对
+幅度完全一致**，故结论以 ratio 为准。另外 `data/aoe_event/val/seq_007` 与
+`data/aoe_motion/val/seq_001` **md5 完全相同**（"12 段"实为 11 段独立）。
+真机段无事件标注故不报 recall。
+
+---

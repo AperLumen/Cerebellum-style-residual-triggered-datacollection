@@ -514,9 +514,12 @@ PREAMBLE = r"""% 由 scripts/build_guide_pdf.py 从 GUIDE.md 生成——不要�
 
 % PDF 书签与可点击目录：这些是"快速跳转"的实现
 \hypersetup{
-  bookmarksnumbered=true,     % 书签带编号
+  % **必须 false**：GUIDE 的章节号（§4.7）是**写在标题文字里**的，LaTeX 若
+  % 再自动编一次，书签就变成"6.6 §4.7 自动化兜底"这种两套编号打架的样子
+  % （实测：读者会以为有两个目录）。编号由正文自带，不要自动加。
+  bookmarksnumbered=false,
   bookmarksopen=true,         % 打开时就展开
-  bookmarksopenlevel=2,       % 展开到二级
+  bookmarksopenlevel=3,       % 展开到三级（x.y.z 也展开）
   colorlinks=true,
   linkcolor=blue!55!black,
   urlcolor=teal!70!black,
@@ -526,6 +529,13 @@ PREAMBLE = r"""% 由 scripts/build_guide_pdf.py 从 GUIDE.md 生成——不要�
   pdfsubject={CMCI / cerebellum_cancel 项目指南},
   pdfkeywords={residual trigger, corollary discharge, IMU, data acquisition}
 }
+
+% **让四级标题也进书签**：默认 \paragraph 不进书签，于是 §4.7.1.1 这类四级
+% 小节在侧栏里整个消失（实测踩到）。tocdepth=4 把它收回来。
+% 注意这些 \setcounter 必须留在 preamble —— 放进 \begin{document} 之后
+% 会让 xelatex 直接报 "No pages of output"。
+\setcounter{tocdepth}{4}
+\setcounter{secnumdepth}{0}   % 不自动编号（GUIDE 的编号写在标题文字里）
 
 % 表格里的长路径可以断行，避免溢出
 \setlength{\emergencystretch}{3em}
