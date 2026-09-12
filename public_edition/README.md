@@ -58,16 +58,65 @@ PYTHONPATH=. python -m pytest tests/ -q
 
 Covers the cancellation statistics, the trigger (gates, hysteresis,
 self-calibration), the gyro/IMU IO helpers, the flow variant, end-to-end
-evaluation, and the acquisition layer contract.
+evaluation, the acquisition layer contract, the full-rotation warp
+(`rotwarp`), and the input contracts.
 
 ## Repository layout
 
 ```
-cerebellum_cancel/   the package: io, core (cancel + trigger), featmap_cancel,
-                     flow_cancel, adapter, pipeline, eval, acquisition
+cerebellum_cancel/   the package:
+                       io                frame / IMU readers
+                       core              cancellation statistics + adaptive trigger
+                       featmap_cancel    feature-map cancellation ("shift" | "rotation")
+                       rotwarp           full rotation-matrix warp (yaw+pitch+roll)
+                       flow_cancel       optical-flow variant (quality upper bound)
+                       adapter           cerebellum as an add-on to a frozen backbone
+                       acquisition       the pluggable collection layer (public API)
+                       pipeline          video + IMU -> clips, end to end
+                       eval              trigger evaluation helpers
+                       contracts         input contracts / explicit failure modes
 scripts/             make_synthetic.py (scene generator), run_experiment.py
                      (baselines comparison), demo_video.py (visual demo)
 tests/               unit + integration tests, no external data required
 ```
 
 Everything is generated locally; the repository contains no datasets.
+
+## What is deliberately NOT in this subset
+
+This edition is the **online acquisition layer**. Two neighbours in the full
+project are omitted, because they belong to the offline dataset layer and none
+of the claims above depend on them:
+
+| Omitted | What it is | Why it is out of scope |
+| --- | --- | --- |
+| `integrity.py` | acquisition-link integrity sentinel | operates on whole recordings, not per-frame acquisition |
+| `dataset.py` | multimodal dataset container (trainable, publishable) | offline training assets, not collection |
+
+Their contract tests are also omitted from `tests/`. The full versions live in
+the parent repository.
+
+## `rotwarp`: the full-rotation warp
+
+`featmap_cancel` supports two prediction modes. `pred="shift"` is the original:
+gyro → `(dx, dy)` constant translation. `pred="rotation"` uses a real rotation
+matrix homography (yaw + pitch + **roll**) via `rotwarp.warp_by_rotation`.
+
+On real phone IMU data the difference is not cosmetic — the same gyro stream
+gives:
+
+| predictor | residual ratio (< 1 = useful) |
+| --- | --- |
+| naive (no compensation) | 1.000 |
+| `shift` (tan-approximation translation) | 1.433 |
+| `rotation` (full matrix, with roll) | **0.614** |
+
+Two independent causes: roll was dropped entirely, and a constant translation
+approximates a field that is actually linear (roll) / quadratic (pitch) in
+position, so the error grows with distance from the centre. Default is still
+`"shift"` so previously published numbers are unchanged.
+
+Two conventions must be declared per dataset (`rotwarp.signs_for` /
+`rotwarp.lag_for`): the sign mapping and the gyro pairing lag. Getting either
+wrong flips compensation into anti-compensation, and **the residual value alone
+will not tell you** — it just looks "worse". See the module docstring.

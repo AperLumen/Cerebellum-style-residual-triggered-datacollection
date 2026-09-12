@@ -1,6 +1,6 @@
 """可插拔采集协议层：帧流 + IMU 流 -> 存储决策 + 残差图。
 
-把触发器包成视觉模型协议栈里的一层：
+把触发器包成视觉模型协议栈里的一层（GUIDE §4.3 近期 3）：
 
     前端 (可插拔)      取消层                    触发层
     HWC uint8 帧  ->  特征图  ->  FeatureMapCancel  ->  AdaptiveTrigger
@@ -13,14 +13,14 @@
 
 - ``frontend``：callable，输入 HWC uint8 帧，输出 (C,H,W) float32 特征图。
   默认内置 ``"mobilenet_v3_small[:3]"``（冻结 backbone 前 3 段，224 输入
-  -> (24,28,28)）；换成任何符合签名的 callable 即可替换（协议栈并入时
-  换成上游模型自己的特征）。
-- ``step()`` 在线逐帧。backbone 前向每帧都跑：冻结前 3 段约 1 ms/帧
-  量级（本机 MPS 实测），30 fps 帧预算的 ~3%，常开可接受；筛掉一帧的
-  存储/带宽成本远高于此。
+  -> (24,28,28)），与 scripts/extract_featmaps.py 行为一致；换成任何符合
+  签名的 callable 即可替换（协议栈并入时换成上游模型自己的特征）。
+- ``step()`` 在线逐帧。backbone 前向每帧都跑：冻结前 3 段约 0.83 ms/帧
+  （本机 MPS 实测，GUIDE §1.2 成本账），30 fps 帧预算的 2.5%，常开可接受；
+  筛掉一帧的存储/带宽成本远高于此，"存它比筛它贵"的方向不成立时不跑才亏。
 - ``finalize()`` 输入结束后调用，返回触发的片段 [(start, end), ...]（秒）。
 
-定位口径：动能不可预测 ≠ 语义重要性。本层的作用是
+定位口径（GUIDE §2.3.7）：动能不可预测 ≠ 语义重要性。本层的作用是
 运动去重 / 带宽预筛 / 片段筛选——剪掉自运动可解释的冗余帧，把存储
 花在运动上不可预测的片段上；语义重要性仲裁必须发生在视觉模型侧。
 """
@@ -118,6 +118,7 @@ class AcquisitionLayer:
              "in_clip": bool,       # 与 keep 同源（触发器当前输出）
              "surprise": float,     # cancel 的 max-|z|（原始终残差强度）
              "score": float,        # 喂给触发器的 maxcell z^2（已发布读出）
+             "t": float,            # 本帧时间戳（秒，原样回传）
              "z_map": (H,W) 残差图,  # z 按通道求 RMS，峰值帧可叠加原帧可视化
              "clips": list}         # 当前已封闭的片段 [(start, end), ...]
         """
@@ -132,6 +133,7 @@ class AcquisitionLayer:
             "in_clip": in_clip,
             "surprise": float(out["surprise"]),
             "score": score,
+            "t": float(t),
             "z_map": np.sqrt((z ** 2).mean(axis=0)).astype(np.float32),
             "clips": list(self.trigger.clips),
         }

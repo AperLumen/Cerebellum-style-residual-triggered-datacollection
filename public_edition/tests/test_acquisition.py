@@ -32,7 +32,8 @@ def make_layer(frontend=gray_frontend, std_ema: float = 0.02,
 
 
 def test_step_output_shapes():
-    """接口形状：逐帧 step 返回 keep/in_clip/surprise/z_map/clips，类型正确。"""
+    """接口形状：逐帧 step 返回 keep/in_clip/surprise/score/t/z_map/clips，
+    类型正确。"""
     rng = np.random.default_rng(0)
     layer = make_layer()
     out: dict | None = None
@@ -40,9 +41,11 @@ def test_step_output_shapes():
         frame = rng.integers(0, 255, (32, 32, 3), dtype=np.uint8)
         out = layer.step(frame, np.zeros(3), t * DT)
     assert out is not None
-    assert set(out) == {"keep", "in_clip", "surprise", "score", "z_map", "clips"}
+    assert set(out) == {"keep", "in_clip", "surprise", "score", "t", "z_map",
+                        "clips"}
     assert isinstance(out["keep"], bool) and isinstance(out["in_clip"], bool)
     assert isinstance(out["surprise"], float) and isinstance(out["score"], float)
+    assert isinstance(out["t"], float)           # 原样回传的时间戳
     assert out["z_map"].shape == (8, 8) and out["z_map"].dtype == np.float32
     assert isinstance(out["clips"], list)
     for a, b in layer.finalize():                # finalize 返回 [(start, end)]
