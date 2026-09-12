@@ -144,6 +144,105 @@ def step_verify_pdf() -> Step:
     return Step("PDF 自检", [PY, "scripts/verify_guide_pdf.py"])
 
 
+def step_ui_smoke() -> Step:
+    """前端冒烟：起真服务、打真 HTTP、验证三条纪律。
+
+    单测直接调 act_* 函数（快、无端口依赖），所以**碰不到** HTTP 层、
+    页面本身、以及"前端只调引擎"这条纪律。这一步起真服务跑一遍——
+    和引擎那条冒烟一个道理：单测结构上覆盖不到的地方才需要端到端。
+    """
+    return Step("前端端到端冒烟", [PY, "-c", UI_SMOKE])
+
+
+UI_SMOKE = r'''
+import json, os, subprocess, sys, time, urllib.request, socket
+
+ROOT = os.getcwd()
+VIDEO = "data/webcam_rec/video.mp4"
+if not os.path.exists(os.path.join(ROOT, VIDEO)):
+    print("没有测试视频，跳过"); sys.exit(0)
+
+# 找一个空闲端口，避免和用户正在跑的服务撞车
+s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+
+env = {**os.environ, "PYTHONPATH": ROOT}
+proc = subprocess.Popen(
+    [sys.executable, "scripts/cmci_ui.py", "--port", str(port)],
+    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+try:
+    # 等服务起来（最多 15s）
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(50):
+        try:
+            urllib.request.urlopen(base + "/", timeout=1); break
+        except Exception:
+            time.sleep(0.3)
+    else:
+        raise RuntimeError("前端没起来")
+
+    def post(path, body):
+        req = urllib.request.Request(
+            base + path, data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"})
+        return json.load(urllib.request.urlopen(req, timeout=180))
+
+    # 1) 页面必须能打开，且是自包含的（无外部资源）
+    html = urllib.request.urlopen(base + "/", timeout=10).read().decode()
+    for bad in ("http://", "https://", "cdn."):
+        assert bad not in html, f"页面引了外部资源 {bad}（离线打不开）"
+    print(f"页面 {len(html)} 字节，自包含")
+
+    # 2) run。**断言要拿引擎当基准**，不能只比对 UI 自己的两个字段——
+    #    它们出自同一个 dict，一起被改就一起"自洽"了（实测：把
+    #    n_segments 硬编码后，弱断言放过了一个真 bug）。
+    d = post("/api/run", {"video": VIDEO, "max_frames": 150})
+    assert d["ok"], d.get("error")
+
+    from cerebellum_cancel.engine import EngineConfig, run as engine_run
+    ref = engine_run(VIDEO, None, cfg=EngineConfig(max_frames=150))
+    ref_s = ref.summary()
+    for k in ("n_frames", "n_segments"):
+        assert d["summary"][k] == ref_s[k], (
+            f"UI 的 {k}={d['summary'][k]} 与引擎的 {ref_s[k]} 不一致"
+            "——前端是不是自己算了一遍？")
+    assert len(d["segments"]) == ref_s["n_segments"], "片段表与摘要不符"
+    print(f"run: {d['summary']['n_frames']} 帧 / {d['summary']['n_segments']} 片段"
+          "（与引擎逐项一致）")
+
+    # 3) replay 调参：必须即时（否则说明又重跑了前端），且结果与引擎 replay 一致
+    t0 = time.time()
+    r = post("/api/replay", {"threshold_k": 20.0, "off_k": 2.5})
+    dt = time.time() - t0
+    assert r["ok"], r.get("error")
+    assert dt < 5.0, f"replay 太慢（{dt:.2f}s）——是不是重跑了前端？"
+
+    from cerebellum_cancel.core import TriggerConfig
+    from cerebellum_cancel.engine import replay as engine_replay
+    ref_r = engine_replay(ref, trigger_cfg=TriggerConfig(threshold_k=20.0,
+                                                        off_k=2.5))
+    assert r["summary"]["n_segments"] == ref_r.summary()["n_segments"], (
+        "replay 结果与引擎不一致——调参路径被改坏了")
+    print(f"replay: {dt*1000:.0f} ms（阈值 20 -> {r['summary']['n_segments']} 片段"
+          "，与引擎一致）")
+
+    # 4) 参数非法要明确拒绝
+    bad = post("/api/replay", {"threshold_k": 5.0, "off_k": 9.0})
+    assert bad["ok"] is False and "off_k" in bad["error"]
+    print("非法参数被明确拒绝")
+
+    # 5) 错误要给人话
+    miss = post("/api/run", {"video": "/nope/x.mp4"})
+    assert miss["ok"] is False and "找不到视频文件" in miss["error"]
+    print("缺失文件给出可读提示")
+finally:
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+'''
+
+
 def step_doc_refs() -> Step:
     """文档里引用的文件必须存在——防止"文档承诺了不存在的东西"。
 
@@ -354,7 +453,7 @@ def main() -> int:
         return 2
 
     steps: list[Step] = [step_tests(), step_pyright(), step_engine_smoke(),
-                         step_doc_refs(), step_manifest(),
+                         step_ui_smoke(), step_doc_refs(), step_manifest(),
                          step_public_edition()]
     if not args.skip_pdf:
         steps += [step_generate_pdf(), step_verify_pdf()]

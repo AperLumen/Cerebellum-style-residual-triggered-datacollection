@@ -518,5 +518,16 @@
    "missing pyarrow gives an actionable message instead of switching formats",
    "empty selection is stated plainly rather than left as an empty table"
   ]
+ },
+ "ui": {
+  "doc": "GUIDE.md §4.8.6",
+  "implementation": "scripts/cmci_ui.py",
+  "tests": [
+   "tests/test_ui.py"
+  ],
+  "smoke": "check_all.py step 4 (starts a real server, drives real HTTP)",
+  "description": "Local web front-end. Zero third-party deps (stdlib http.server + plain HTML/JS, no CDN) and binds to 127.0.0.1 only, so it works offline and data never leaves the machine. It computes nothing itself: it calls engine.run() and engine.replay() and nothing else, so there is no second source of truth to drift.",
+  "why_replay": "Measured cost split: decode 0.68 ms/frame (21%), frontend+cancel+trigger 2.54 ms/frame (79%). score is a product of the frontend and does NOT depend on trigger parameters, so re-tuning only needs to replay the trigger layer: 4.03 s -> 0.002 s on 900 frames (1907x). It is a pure compute saving, not a semantic change: score/surprise/t/gyro stay bit-identical and replay(default).keep == run().keep, both locked by tests.",
+  "invariant": "replay reads only the lossless float64 score produced by the engine. It never reconstructs decisions from the z-map (lossy diagnostic, GUIDE 4.1) and never recomputes the frontend."
  }
 }

@@ -362,6 +362,74 @@ def _weights(surprise: np.ndarray) -> np.ndarray:
 
 # ------------------------------------------------------------ 输入适配器
 
+def replay(res: CMCIResult, *, trigger_cfg: Any = None,
+           rule: Rule | None = None,
+           keep_z_maps: bool | None = None) -> CMCIResult:
+    """**只重跑触发层**，复用 `res` 里已算好的逐帧 score —— 用于"调参重跑"。
+
+    ## 为什么需要它（实测决定的）
+
+    分解成本后发现，改触发阈值时**真正贵的是前端前向，不是解码**：
+
+        解码 + 补通道      0.68 ms/帧   （21%）
+        前端 + 取消 + 触发  2.54 ms/帧   （79%）
+
+    而 `score` 是前端+取消的产物、与触发阈值**无关**。所以调阈值时把前 79%
+    省掉即可，触发本身是纯 EMA（微秒级），整段几乎瞬时。
+
+    ## 一条不可越过的纪律
+
+    重放**只能读引擎产出的 `score`**，不能拿 z 图反推、更不能自己重算。
+    z 图是有损诊断件（GUIDE §4.1：从量化 z 反推决策会漂），而 score 是
+    无损 float64 决策标量。这正是 `record`/`dataset` 两条线共用的契约。
+
+    Args:
+        res: 已跑过的结果（提供逐帧 score/t/gyro）。
+        trigger_cfg: 新的 TriggerConfig（None = 用默认）。
+        rule: 第 2 层钩子（同 `run`）。
+        keep_z_maps: 是否保留原 z 图（None = 沿用 res）。
+
+    Returns:
+        新的 `CMCIResult`。t/gyro/score/surprise 与输入**逐位相同**
+        （它们不依赖触发参数），只有 keep/segments 会变。
+    """
+    from .core import AdaptiveTrigger, TriggerConfig
+
+    cfg = trigger_cfg or TriggerConfig()
+    trig = AdaptiveTrigger(cfg=cfg)
+
+    fps = res.meta.get("fps") or 30.0
+    check_positive(fps, "fps")
+
+    keeps: list[int] = []
+    for i in range(res.n_frames):
+        on = trig.update(float(res.t[i]), float(res.score[i]), fps)
+        keeps.append(1 if on else 0)
+    clips = trig.finalize(float(res.t[-1]) if res.n_frames else 0.0)
+
+    keep_arr = np.asarray(keeps, dtype=np.uint8)
+    segments = _clips_to_segments(clips, res.t, res.score, keeps)
+    if rule is not None:
+        view = FrameView(t=res.t, score=res.score, surprise=res.surprise,
+                         keep=keep_arr, gyro=res.gyro)
+        segments = list(rule(segments, view))
+
+    meta = dict(res.meta)
+    meta["replayed"] = True
+    meta["trigger_cfg"] = {
+        "threshold_k": cfg.threshold_k, "off_k": cfg.off_k,
+        "pre_roll": cfg.pre_roll, "post_roll": cfg.post_roll,
+        "min_clip_len": cfg.min_clip_len, "robust": cfg.robust,
+    }
+
+    keep_z = res.z_maps if keep_z_maps is None else (
+        res.z_maps if keep_z_maps else None)
+    return CMCIResult(
+        t=res.t, gyro=res.gyro, score=res.score, surprise=res.surprise,
+        keep=keep_arr, weight=res.weight, segments=segments,
+        z_maps=keep_z, meta=meta)
+
+
 class _FileSource:
     """文件输入：视频帧 + IMU csv。把 I/O 与引擎隔开，便于换源。"""
 
