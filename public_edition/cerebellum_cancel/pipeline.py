@@ -93,7 +93,15 @@ def run_pipeline(video_path: str, imu_path: str | None,
         gray = stream.read_gray()
         if gray is None:
             break
-        gyro, hint = gyro_at(imu, hint, t)
+        if imu:
+            gyro, hint = gyro_at(imu, hint, t)
+        else:
+            # 没有 IMU：**显式**选择不补偿，而不是让 gyro_at 报错。
+            # 报错本身是对的（gyro_at 拒绝"假装设备静止"），但那是**库**的
+            # 立场；这里作为编排层要给出可用行为，并把降级写进结果。
+            # 注意：这条路径比 engine 的 no_imu='auto' 弱——engine 会用视觉
+            # 估计自运动，这里只是不补偿。需要更强降级请用 engine.run()。
+            gyro = np.zeros(3, dtype=np.float64)
         if mirror:
             gyro = np.array(gyro, dtype=np.float64)
             gyro[1] = -gyro[1]          # mirrored view flips yaw direction

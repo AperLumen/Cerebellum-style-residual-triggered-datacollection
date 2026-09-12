@@ -543,5 +543,20 @@
   "guardrail": "MIN_COMPENSABLE_SHIFT_PX = 1.0: below this the estimator returns zero, i.e. deliberately does not warp. Sub-pixel compensation is a net loss, so returning 0 is the correct conservative choice, not a failure.",
   "honesty": "Gyro=0 means 'assume the device is still', which is exactly the frame-differencing failure mode this project exists to avoid. So all three modes are explicit, and the chosen one is written into result.meta.motion_source and a motion_source_note, so downstream can never mistake a degraded run for an IMU-backed one.",
   "assess_helper": "assess_motion(prev, gray) reports shift_px / inliers / above_compensation_floor with actionable advice -- call this FIRST to decide whether compensation is worth enabling at all."
+ },
+ "io_contracts": {
+  "doc": "GUIDE.md §4.10",
+  "implementation": "cerebellum_cancel/io.py",
+  "tests": [
+   "tests/test_io.py"
+  ],
+  "description": "Input-contract hardening for the I/O boundary -- the only entry point for dirty data, and the last module without validation (probe: 9 of 9 invalid inputs passed silently).",
+  "worst_before": "gyro_at([], hint, t) returned all zeros, i.e. silently assumed the device was STILL -- the exact failure mode this project exists to avoid. gyro_at also LINEARLY EXTRAPOLATED outside the sample range (t=-5.0 yielded [-14,-13,-12], inventing negative angular rates). load_imu_csv dropped malformed rows via `except: continue` with no signal at all (5 rows in, 2 silently lost).",
+  "design_notes": [
+   "bad rows: default on_bad_row='warn' skips AND prints a count to stderr -- a few malformed rows is normal in real data so hard-failing would make the tool unusable, but complete silence is unacceptable; 'raise' available.",
+   "gyro_at refuses an empty list rather than returning zeros: the downgrade choice belongs to the caller (engine's no_imu), not to the lowest layer.",
+   "pipeline therefore had to handle empty IMU explicitly; it chooses no compensation and documents that this is WEAKER than engine's no_imu='auto' (which estimates motion visually)."
+  ],
+  "verification": "288 tests pass; every silent path above has a regression test. No module in the project is now without test coverage."
  }
 }
