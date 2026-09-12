@@ -737,6 +737,58 @@ PYTHONPATH=. .venv/bin/python scripts/build_dataset.py \
 PYTHONPATH=. .venv/bin/python -m pytest tests/test_dataset.py -q
 ```
 
+## 工程交付层：塞数据进去，出数据集
+
+上面是**研究叙事**（哪些主张活了、哪些被否）。与之并行的是**工程交付层**——
+它的价值不依赖任何一条被否证的主张，因为交付的是"失败模式可预测"这件事本身。
+全部见 GUIDE.md §4.4–4.10，这里只给入口。
+
+**一条命令跑完所有验收**（10 步，约 40 s）：
+
+```bash
+make check                      # 快速失败
+PYTHONPATH=. .venv/bin/python scripts/check_all.py --all   # 跑完再汇总
+```
+
+| 步骤 | 一句话 |
+| --- | --- |
+| 单元测试 | 301 passed / 6 既存 errors（既存失败写成**基线**，数量变了就报警） |
+| 类型检查 | 交付物 0 错误；一次性探查脚本不超基线 |
+| 契约随机污染 | 脏值喂入公共入口，**静默垃圾 0 / 错误类型不统一 0** |
+| 引擎 + 前端端到端冒烟 | 真读视频、真起 HTTP 服务，UI 数字与引擎**逐项比对** |
+| 文档引用完整性 | 143 处路径引用必须都真实存在 |
+| manifest 一致性 | 登记表指向的文件都必须存在 |
+| 公开子集一致性 | `public_edition/` 与主版**逐字节**一致 |
+| 重建 + 自检 GUIDE.pdf | 书签树 / 119 条可点击链接 / 25 条内容锚点 |
+
+**直接把录制变成数据集**（不需要写代码）：
+
+```bash
+# A. 命令行（video 是位置参数）
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run \
+    data/webcam_rec/video.mp4 --imu data/real_imu/imu.csv \
+    --out runs/demo --format dataset --frontend
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run data/webcam_rec/video.mp4 \
+    --dry-run                      # 只想看会切出什么，不落盘
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run --help-rule   # 自定义筛选规则示例
+
+# B. 本地 Web（零依赖，只绑 127.0.0.1）
+PYTHONPATH=. .venv/bin/python scripts/cmci_ui.py      # 然后浏览器打开提示的地址
+```
+
+**三层设计的一句话总结**（§4.8）：`run()` 是**唯一**计算的地方；`replay()`
+只重跑触发层（实测 **1907×** 快，900 帧 4.03 s → 0.002 s，判据是无损的——
+`score` 逐位相同）；导出器是纯函数（dataset / html / jsonl / parquet）。
+这是"调参不必重算"的前提，也是前端能实时响应滑块的原因。
+
+**关于 `import` 契约的取舍**（§4.4）：所有非法输入抛 `ContractError` 的子类，
+且**同时继承 `ValueError`**（向后兼容）。`dt=0` 是**刻意允许**的——它有明确
+语义（无时间流逝，特征只留偏置），上游在首帧合法产生它。
+
+**没有 IMU 时**（§4.9）：`--no-imu auto|require|assume_still`。默认 `auto`
+会用视觉运动估计判断；`assume_still` 是唯一"假装静止"的档位，必须显式指定
+——**静默假定设备静止**是本项目实测过的最隐蔽失效源。
+
 ## 行走级片段："运动越大副本越值钱"证伪（负结果）
 
 真实数据上伴随放电最后的辩护是尺度：桌面运动亚像素，warp 中性是

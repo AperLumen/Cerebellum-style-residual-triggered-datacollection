@@ -1122,6 +1122,65 @@ PYTHONPATH=. .venv/bin/python scripts/build_dataset.py \
 PYTHONPATH=. .venv/bin/python -m pytest tests/test_dataset.py -q
 ```
 
+## Engineering delivery layer: put a recording in, get a dataset out
+
+Everything above is the **research narrative** (which claims survived, which were
+falsified). Running in parallel is an **engineering delivery layer** whose value
+does not depend on any single falsified claim — what it delivers is *predictable
+failure modes*. See GUIDE.md §4.4–4.10; only the entry points are here.
+
+**One command runs every acceptance check** (10 steps, ~40 s):
+
+```bash
+make check                      # fast-fail
+PYTHONPATH=. .venv/bin/python scripts/check_all.py --all   # run all, then summarize
+```
+
+| Step | In one line |
+| --- | --- |
+| Unit tests | 301 passed / 6 pre-existing errors (pre-existing failures written as a **baseline**; the count changing is what raises the alarm) |
+| Type check | 0 errors on deliverables; one-off probe scripts must not exceed baseline |
+| Contract fuzzing | Dirty values fed to public entry points: **silent garbage 0 / inconsistent error types 0** |
+| Engine + front-end end-to-end | Really opens a video, really starts an HTTP server, compares UI numbers **against the engine** |
+| Doc reference integrity | 143 path references must all exist |
+| Manifest consistency | Every file the registry points at must exist |
+| Public-subset consistency | `public_edition/` must match the main tree **byte-for-byte** |
+| Rebuild + verify GUIDE.pdf | Bookmark tree / 119 clickable links / 25 content anchors |
+
+**Turn a recording into a dataset** (no code required):
+
+```bash
+# A. Command line (video is positional)
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run \
+    data/webcam_rec/video.mp4 --imu data/real_imu/imu.csv \
+    --out runs/demo --format dataset --frontend
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run data/webcam_rec/video.mp4 \
+    --dry-run                      # see what would be cut, write nothing
+PYTHONPATH=. .venv/bin/python scripts/cmci.py run --help-rule   # custom selection rule
+
+# B. Local web UI (zero dependencies, binds 127.0.0.1 only)
+PYTHONPATH=. .venv/bin/python scripts/cmci_ui.py      # then open the printed address
+```
+
+**The three-layer design in one line** (§4.8): `run()` is the **only** place that
+computes; `replay()` re-runs only the trigger layer (measured **1907×** faster,
+900 frames 4.03 s → 0.002 s, and lossless — `score` is bit-identical); exporters
+are pure functions (dataset / html / jsonl / parquet). That is what makes
+"re-tune without recomputing" possible, and why the front end can respond to a
+slider in real time.
+
+**The trade-off behind the import contract** (§4.4): every invalid input raises a
+subclass of `ContractError`, which **also inherits `ValueError`** (backward
+compatibility). `dt=0` is **deliberately allowed** — it has a defined meaning (no
+time elapsed, so features keep only the bias term) and the upstream produces it
+legitimately on the first frame.
+
+**When there is no IMU** (§4.9): `--no-imu auto|require|assume_still`. The
+default, `auto`, decides via visual motion estimation; `assume_still` is the only
+mode that *pretends the device is stationary*, and it must be requested
+explicitly — **silently assuming stillness** is the most insidious failure source
+measured in this project.
+
 ## Walking-level segments: "more motion, more value" falsified (negative result)
 
 The one remaining defense of the corollary discharge on real data was
