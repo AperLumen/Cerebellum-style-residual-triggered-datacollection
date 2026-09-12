@@ -1065,10 +1065,15 @@ zero, 0.0475). Adding temporal channels changes nothing (+0.005).
 Everything in this project runs on 1–8 s coarse intervals with frame-level
 binary targets, so even *with* labels the same-scene ceiling is ≈0.59 AUC.
 
-**Conclusion: the bottleneck is supervision granularity, not signal
-processing.** Closed. Re-opening needs finer event-moment labels or the
-downstream task's own failure labels — neither of which the existing data
-can provide. Two hypotheses were falsified along the way (label-prior
+**Conclusion: the bottleneck is not supervision granularity — it is the domain,
+and this is a quantity error, not an implementation gap.** The literal reading
+("more supervision would fix it") is wrong and dangerous, because three
+independent facts rule it out: cross-scene is *below* chance, temporal channels
+add nothing (+0.005, p=0.11), and the residual cannot beat a raw uncompensated
+frame difference. All three point to the same place: **"when did the event
+happen" is outside the domain of the residual quantity.** Re-opening does not
+need finer labels or the downstream task's own failure labels — it needs a
+different quantity. Two hypotheses were falsified along the way (label-prior
 shift, r = +0.101, wrong sign; temporal channels add nothing, p = 0.11) and
 one experiment design was wrong and is recorded as such (a first-half/
 second-half within-scene split degrades to AUC 0.500 on 6 of 10 segments
@@ -1490,6 +1495,28 @@ PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
 
 ## Honest limitations
 
+> **Before reading these, note what they are.** Most items marked
+> "measured negative / does not hold" are **domain-of-validity measurements**,
+> not "this method failed". The residual is the **prediction residual of camera
+> self-motion** — the question it answers is strictly "which pixels' motion can
+> I not explain by self-motion". "What matters" is a **world-side** semantic
+> question. Using a camera-side motion quantity to carry a world-side semantic
+> label is a **category error**: it is bound to come out negative, **not because
+> the estimator is weak, but because the question is outside its domain**.
+>
+> The evidence is that the same machinery is precision-effective **inside** its
+> domain — a real-hardware gyro segment turns the residual from 1.36× to
+> **0.84×** (r=+0.958), cost is two orders of magnitude below optical flow, and
+> it works across 22 segments and multiple scenes. **Positive results are all
+> inside the domain; negative ones are all outside.**
+>
+> So the value of the items below is not "we ruled out a path" but **closing a
+> boundary**: four independent falsifications approach from different
+> directions and land in the same place — which means the boundary is **real**,
+> not an implementation or tuning problem. Alongside these there are **genuine
+> negative results** (translation model, MLP head, screen recording, DINOv2
+> swap) — those really are dead ends. The two kinds must be read separately.
+
 - **Screen recording is a dead end for this method (measured, not assumed).**
   A `screencapture -v` recording of the scene was tested end-to-end: static
   frames are clean (residual 4e-5), but under motion even an *oracle*
@@ -1544,15 +1571,21 @@ PYTHONPATH=. .venv/bin/python scripts/run_trigger_scan_s8.py data/dataset
   structure unfavourable to interval coverage (B). See
   GUIDE.md §2.3.8.
 - **Retargeting to transition moments does not rescue it, and neither does
-  supervision** (measured, 2026-09-12). Scoring four target definitions
+  supervision — because the problem is not supervision, it is the domain**
+  (measured, 2026-09-12). Scoring four target definitions
   (boxcar/onset/offset/bounds) × six signals leaves all 24 cells in
   0.5–0.6 with **none significant** (best p=0.109); the fully-featured
   residual is indistinguishable from an uncompensated feature-map frame
   difference (5/10 segments, p=1.000). With labels allowed, kNN on frozen
   features reaches only **0.589 AUC within one scene** and **0.478 across
-  scenes (below chance)** — so the bottleneck is supervision granularity
-  (1–8 s intervals, frame-level binary), not signal processing. See
-  GUIDE.md §2.3.8.
+  scenes (below chance)**. **Reading this literally as "the bottleneck is
+  supervision granularity, so finer labels would fix it" is wrong and
+  dangerous**: if it were merely supervision, cross-scene would not fall below
+  chance, the temporal channel would have added something, and the residual
+  would beat a raw frame difference — none of the three happened. The correct
+  reading is that **"when did the event happen" is outside the domain of the
+  residual quantity**, so this line is **not worth retrying** — it is not a
+  case of "not enough data". See GUIDE.md §2.3.8.
 - **The gyro warp has never improved real-data residual quality** at any
   measured motion scale (desk: physically neutral; high-motion pair: −12%;
   walking-level: +11%, worse than naive on 3/4 segments). The resolution
@@ -1657,10 +1690,12 @@ Open, in priority order:
    vision-model side. Side product: a real defect in `AdaptiveTrigger`
    (gate latching open, 2/10 segments) was found and fixed
    (`tests/test_gate_stats.py`).
-7. ~~Better signal for the gate / better filter~~ **closed, negative**
+7. ~~Better signal for the gate / better filter~~ **closed: domain boundary**
    (section above, 2026-09-12): retargeting to transition moments leaves
    24/24 cells insignificant, and with labels allowed the same-scene
-   ceiling is only 0.589 AUC (cross-scene 0.478). Re-opening this line
-   needs **finer supervision** — single-frame event moments, or the
-   downstream task's own failure labels — which no existing dataset here
-   provides. A better filter is not the missing ingredient.
+   ceiling is only 0.589 AUC (cross-scene 0.478). The reading "re-opening
+   this line needs **finer supervision**" is **wrong** (see the correction
+   above) — three independent facts (cross-scene below chance, no temporal
+   increment, no edge over a raw frame difference) point at a **domain
+   problem**, not at label resolution. So it is not worth retrying, and the
+   missing ingredient is neither a better filter nor better labels.
