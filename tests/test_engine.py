@@ -279,11 +279,38 @@ def test_cli_rejects_non_positive_fps(capsys):
 
 
 def test_cli_warns_when_no_imu(capsys):
-    """**不静默降级**：没有 IMU 必须明确警告能力会退化。"""
+    """**不静默降级**：没有 IMU 必须明确说明将用什么替代、以及代价。
+
+    注意断言的是**语义**（说明了降级方式 + 代价）而不是具体文案——
+    文案改过一次（从"退化为不补偿"改成"用视觉估计"），当时测试正确地
+    失败了。锚在语义上就不会因为措辞调整而误报。
+    """
     from scripts.cmci import main
     main(["run", "/nonexistent/x.mp4", "--out", "/tmp/x", "--dry-run"])
     err = capsys.readouterr().err
-    assert "IMU" in err and "退化" in err
+    assert "IMU" in err, "必须提到缺少 IMU"
+    # 要说明用什么替代，以及它是降级路径
+    assert "视觉估计" in err or "降级" in err
+    assert "降级" in err or "贵" in err, "要说明这条路更贵/更差"
+
+
+def test_cli_assume_still_warns_it_is_for_fixed_cameras_only(capsys):
+    """`assume_still` 只适用于固定机位——必须说清楚，否则会被误用。"""
+    from scripts.cmci import main
+    main(["run", "/nonexistent/x.mp4", "--out", "/tmp/x",
+          "--no-imu", "assume_still", "--dry-run"])
+    err = capsys.readouterr().err
+    assert "固定机位" in err
+    assert "静止" in err
+
+
+def test_cli_require_mode_refuses(capsys):
+    """`require` 没有 IMU 就该拒绝（退出码 2），而不是继续跑。"""
+    from scripts.cmci import main
+    rc = main(["run", "/nonexistent/x.mp4", "--out", "/tmp/x",
+               "--no-imu", "require"])
+    assert rc == 2
+    assert "require" in capsys.readouterr().err
 
 
 def test_cli_missing_rule_file_is_an_error(capsys):

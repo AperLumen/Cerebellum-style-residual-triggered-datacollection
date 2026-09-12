@@ -529,5 +529,19 @@
   "description": "Local web front-end. Zero third-party deps (stdlib http.server + plain HTML/JS, no CDN) and binds to 127.0.0.1 only, so it works offline and data never leaves the machine. It computes nothing itself: it calls engine.run() and engine.replay() and nothing else, so there is no second source of truth to drift.",
   "why_replay": "Measured cost split: decode 0.68 ms/frame (21%), frontend+cancel+trigger 2.54 ms/frame (79%). score is a product of the frontend and does NOT depend on trigger parameters, so re-tuning only needs to replay the trigger layer: 4.03 s -> 0.002 s on 900 frames (1907x). It is a pure compute saving, not a semantic change: score/surprise/t/gyro stay bit-identical and replay(default).keep == run().keep, both locked by tests.",
   "invariant": "replay reads only the lossless float64 score produced by the engine. It never reconstructs decisions from the z-map (lossy diagnostic, GUIDE 4.1) and never recomputes the frontend."
+ },
+ "no_imu_fallback": {
+  "doc": "GUIDE.md §4.9 (visual_motion)",
+  "implementation": "cerebellum_cancel/visual_motion.py",
+  "wired_in": "cerebellum_cancel/engine.py (EngineConfig.no_imu: auto/require/assume_still)",
+  "tests": [
+   "tests/test_visual_motion.py"
+  ],
+  "survey": "scripts/survey_oss.py -- no existing library does this; stabilizer libs target the OPPOSITE goal (smooth jitter away, we keep unpredictable change)",
+  "chosen_method": "sparse features (goodFeaturesToTrack) + LK + RANSAC affine partial. Measured 0.96 ms/frame vs 1.74 for ECC and 0.77 for phase correlation; chosen because it yields a full similarity transform including ROTATION, and rotation-not-modelled was the largest measured error source in the main path. Still 29x the cost of the IMU path (0.033 ms/frame).",
+  "negative_result": "On data/webcam_rec/video.mp4, visual affine compensation made residuals WORSE: no-comp 2.632, translation-only 4.962 (1.885x), rotation-only 6.650 (2.527x). The estimate itself was sound (median 144 inliers); the failure is that this data has essentially no self-motion to remove (median 0.29 px / 0.05 deg) while interpolating costs sharpness. Matches the existing finding that desktop-level egocentric motion is sub-pixel at 28x28.",
+  "guardrail": "MIN_COMPENSABLE_SHIFT_PX = 1.0: below this the estimator returns zero, i.e. deliberately does not warp. Sub-pixel compensation is a net loss, so returning 0 is the correct conservative choice, not a failure.",
+  "honesty": "Gyro=0 means 'assume the device is still', which is exactly the frame-differencing failure mode this project exists to avoid. So all three modes are explicit, and the chosen one is written into result.meta.motion_source and a motion_source_note, so downstream can never mistake a degraded run for an IMU-backed one.",
+  "assess_helper": "assess_motion(prev, gray) reports shift_px / inliers / above_compensation_floor with actionable advice -- call this FIRST to decide whether compensation is worth enabling at all."
  }
 }

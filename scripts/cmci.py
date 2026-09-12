@@ -110,11 +110,25 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # --- 明确的降级警告（不静默）---
     if not args.imu:
-        print("[警告] 没有提供 IMU（--imu）。将退化为**不补偿**模式：", file=sys.stderr)
-        print("       设备自运动不会被抵消，任何晃动都会被当成'变化'。",
-              file=sys.stderr)
-        print("       这条路径的筛选质量明显低于有 IMU 的情况。",
-              file=sys.stderr)
+        if args.no_imu == "require":
+            print("没有提供 IMU（--imu），而 --no-imu=require 要求必须有。",
+                  file=sys.stderr)
+            return 2
+        if args.no_imu == "assume_still":
+            print("[警告] 没有 IMU 且 --no-imu=assume_still：将**假设设备静止**。",
+                  file=sys.stderr)
+            print("       这**只能用于固定机位**——移动设备上自运动会被当成"
+                  "真实变化，", file=sys.stderr)
+            print("       正是本项目要解决的问题。", file=sys.stderr)
+        else:
+            print("[注意] 没有提供 IMU，将用**视觉估计**代替伴随放电副本：",
+                  file=sys.stderr)
+            print("       稀疏特征+RANSAC 仿射，约 0.96 ms/帧（IMU 是 0.033，"
+                  "贵 29 倍）。", file=sys.stderr)
+            print("       这是一条**降级**路径，不是等价替代；且若自运动是亚像素的，"
+                  "补偿会净亏。", file=sys.stderr)
+            print("       建议先跑 assess_motion 看运动量（见 GUIDE §4.9）。",
+                  file=sys.stderr)
 
     if args.dry_run:
         print("=== dry-run（不读写任何文件）===")
@@ -130,6 +144,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = EngineConfig(
         frontend=args.frontend, fps=args.fps, imu_offset=args.imu_offset,
         mirror=args.mirror, max_frames=args.max_frames,
+        no_imu=args.no_imu,
         keep_z_maps=("dataset" in formats),   # 只有数据集导出需要 z 图
     )
 
@@ -232,6 +247,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="视图水平镜像（会翻转 yaw）")
     r.add_argument("--max-frames", type=int, default=None,
                    help="只处理前 N 帧（调试）")
+    r.add_argument("--no-imu", default="auto",
+                   choices=("auto", "require", "assume_still"),
+                   help="没 IMU 时怎么办：auto=视觉估计（默认）/ "
+                        "require=报错拒绝 / assume_still=假设静止（仅限固定机位）")
     r.add_argument("--rule", default=None,
                    help="第 2 层业务规则 .py（见 --help-rule）")
     r.add_argument("--dry-run", action="store_true",

@@ -218,6 +218,21 @@ class EngineConfig:
     # 不参与决策；决策用无损 float64 score（见 GUIDE §4.1）。
     keep_z_maps: bool = True
 
+    # --- 无 IMU 时的降级方式 ---
+    # "auto"     有 IMU 用 IMU；没有则用视觉估计（推荐，且会在 meta 里声明）
+    # "require"  没有 IMU 就报错（数据必须带 IMU 的场景，避免静默换方法）
+    # "assume_still" 假设设备静止（gyro=0）。**只适用于固定机位**；
+    #            移动设备上会把自运动当成真实变化——正是本项目要解决的问题。
+    no_imu: str = "auto"
+    # 视觉估计器是否可用（"auto" 用它）。关掉可强制走 assume_still。
+    visual_motion: bool = True
+
+    def __post_init__(self) -> None:
+        if self.no_imu not in ("auto", "require", "assume_still"):
+            raise ConfigError(
+                f"no_imu 必须是 auto / require / assume_still，实得 "
+                f"{self.no_imu!r}")
+
 
 @dataclass
 class FrameView:
@@ -267,7 +282,8 @@ def run(video_path: str, imu_path: str | None = None, *,
 
     src = source if source is not None else _FileSource(
         video_path, imu_path, fps=cfg.fps, crop=cfg.crop,
-        imu_offset=cfg.imu_offset, mirror=cfg.mirror)
+        imu_offset=cfg.imu_offset, mirror=cfg.mirror,
+        no_imu=cfg.no_imu, visual_motion=cfg.visual_motion)
 
     layer = AcquisitionLayer(frontend=cfg.frontend)
 
@@ -320,6 +336,9 @@ def run(video_path: str, imu_path: str | None = None, *,
             "fps": src.meta.get("fps", cfg.fps),
             "frontend": cfg.frontend,
             "imu": src.meta.get("imu"),
+            # **自运动的来源必须写进产物。** 这是最容易被误读的一个字段：
+            # 同样是 5 个片段，用 IMU 选出来的和假设静止选出来的含义完全不同。
+            "motion_source": src.meta.get("motion_source", "imu"),
             "engine_version": 1,
             # 把已知边界写进产物，避免下游误读
             "selection_scope": (
@@ -329,6 +348,9 @@ def run(video_path: str, imu_path: str | None = None, *,
                 "task-specific selection."),
         },
     )
+    note = src.meta.get("motion_source_note")
+    if note:
+        res.meta["motion_source_note"] = note
     return res
 
 
@@ -431,11 +453,16 @@ def replay(res: CMCIResult, *, trigger_cfg: Any = None,
 
 
 class _FileSource:
-    """文件输入：视频帧 + IMU csv。把 I/O 与引擎隔开，便于换源。"""
+    """文件输入：视频帧 + IMU csv。把 I/O 与引擎隔开，便于换源。
+
+    **无 IMU 时的行为由 `cfg.no_imu` 决定，且一定会在 meta 里声明**——
+    静默把自运动当成真实变化正是本项目要解决的问题（GUIDE §0.2）。
+    """
 
     def __init__(self, video_path: str, imu_path: str | None, *,
-                 fps: float | None, crop, imu_offset: float, mirror: bool):
-        from .io import VideoStream, gyro_at, load_imu_csv
+                 fps: float | None, crop, imu_offset: float, mirror: bool,
+                 no_imu: str = "auto", visual_motion: bool = True):
+        from .io import VideoStream, load_imu_csv
 
         if fps is not None:
             check_positive(fps, "fps")
@@ -451,18 +478,51 @@ class _FileSource:
         self._video_path = video_path
         self._imu_path = imu_path
 
+        # --- 决定无 IMU 时怎么办（这是一个**显式**的决策，不是默认值）---
+        has_imu = bool(imu)
+        if has_imu:
+            mode = "imu"
+        elif no_imu == "require":
+            raise InsufficientDataError(
+                "这段数据没有 IMU，而 cfg.no_imu='require' 要求必须有。"
+                "如果接受降级，用 no_imu='auto'（视觉估计）或 "
+                "'assume_still'（仅限固定机位）。")
+        elif no_imu == "assume_still" or not visual_motion:
+            mode = "assume_still"
+        else:
+            mode = "visual"
+        self.mode = mode
+        self._vis = None
+        if mode == "visual":
+            from .visual_motion import VisualMotionEstimator
+            self._vis = VisualMotionEstimator()
+        self._vis_fail = 0        # 视觉估计失败的帧数（如实上报）
+
     def __len__(self) -> int:
         # 未知时给 0（引擎不依赖它做分配）
         return 0
 
     @property
     def meta(self) -> dict:
-        return {"source": self._video_path, "fps": self._stream.fps,
-                "imu": self._imu_path}
+        d = {"source": self._video_path, "fps": self._stream.fps,
+             "imu": self._imu_path}
+        d["motion_source"] = self.mode
+        if self.mode == "visual":
+            d["motion_source_note"] = (
+                "no IMU: self-motion estimated VISUALLY (sparse features + "
+                "RANSAC affine, ~0.96 ms/frame vs 0.033 ms for IMU). This is "
+                "a degraded path, not an equivalent one.")
+        elif self.mode == "assume_still":
+            d["motion_source_note"] = (
+                "no IMU: assuming the device is STILL (gyro=0). Only valid for "
+                "a fixed camera; on a moving rig self-motion will be counted "
+                "as real change.")
+        return d
 
     def frames(self) -> Iterable[tuple[np.ndarray, np.ndarray, float]]:
         from .io import gyro_at
         t, hint = 0.0, 0
+        prev_for_vis = None
         while True:
             gray = self._stream.read_gray()
             if gray is None:
@@ -477,12 +537,42 @@ class _FileSource:
                 frame = np.repeat(gray[:, :, None], 3, axis=2)
             else:
                 frame = gray
-            gyro, hint = gyro_at(self._imu, hint, t)
+
+            if self.mode == "imu":
+                gyro, hint = gyro_at(self._imu, hint, t)
+            elif self.mode == "visual":
+                # 用视觉运动估计替代伴随放电副本。
+                # 第 0 帧没有前一帧可比；估计失败的帧明确计失败并回退到 0
+                # （而不是拿上一次的读数糊过去——那会伪造一个"设备在动"的信号）。
+                if prev_for_vis is None:
+                    gyro = np.zeros(3, dtype=np.float64)
+                else:
+                    assert self._vis is not None
+                    ge = self._vis.gyro_equivalent(
+                        prev_for_vis, gray, f_map=_F_MAP_DEFAULT,
+                        dt=self._stream.frame_dt)
+                    if not np.any(ge):
+                        self._vis_fail += 1
+                    gyro = ge
+            else:                          # assume_still
+                gyro = np.zeros(3, dtype=np.float64)
+
             if self._mirror:
                 gyro = np.asarray(gyro, dtype=np.float64).copy()
                 gyro[1] = -gyro[1]          # 镜像视图翻转 yaw
             yield frame, gyro, t
+            prev_for_vis = gray
             t += self._stream.frame_dt
+
+    @property
+    def visual_failures(self) -> int:
+        return self._vis_fail
+
+
+# 特征图上的等效焦距默认值：24.25 * W/28，W=320 时约 277（源图像素）。
+# 换算到 28 格特征图即为 GUIDE 里的 f_map≈42.7 量级；视觉估计输出的是
+# 源图像素，故此处用源图尺度。做成常量而不是散落的魔数。
+_F_MAP_DEFAULT = 277.0
 
 
 # ---------------------------------------------------------------- 导出器
