@@ -49,6 +49,7 @@ import cv2
 import numpy as np
 
 from .contracts import (ConfigError, NonFiniteError, ShapeError,
+                        check_scalar,
                         check_finite_array)
 
 # warp_by_rotation **有意**接受 array-like 的 gyro（list/tuple/ndarray）——
@@ -103,11 +104,44 @@ def rotation_homography(pitch_deg: float, yaw_deg: float, roll_deg: float,
     ``K R K⁻¹`` 映射，即得到"上一帧内容在这一帧应出现的位置"。
     符号约定见 ``rotation_matrix_zyx``。
     """
-    R = rotation_matrix_zyx(pitch_deg, yaw_deg, roll_deg, dt,
+    # **fuzz 发现（2026-09-12，第二轮）**：下面 `np.radians(pitch_deg)` 这类
+    # 算术直接作用在入参上。若传入字符串，Python 抛的是
+    # `TypeError: can't multiply sequence by non-int`；传入 None 抛
+    # `unsupported operand type(s) for *`。两者都不是 ContractError，
+    # 调用方无法用统一方式处理。先经 check_scalar 归一化（它内部已包裹
+    # 转换异常），后续算术面对的一定是 float。
+    _p = check_scalar(pitch_deg, "pitch_deg", "rotation_homography")
+    _y = check_scalar(yaw_deg, "yaw_deg", "rotation_homography")
+    _r = check_scalar(roll_deg, "roll_deg", "rotation_homography")
+    _dt = check_scalar(dt, "dt", "rotation_homography")
+    _f = check_scalar(f, "f", "rotation_homography")
+    _cx = check_scalar(cx, "cx", "rotation_homography")
+    _cy = check_scalar(cy, "cy", "rotation_homography")
+    R = rotation_matrix_zyx(_p, _y, _r, _dt,
                             yaw_sign=yaw_sign, pitch_sign=pitch_sign,
                             roll_sign=roll_sign)
-    K = np.array([[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]])
-    return (K @ R @ np.linalg.inv(K)).astype(np.float32)
+    K = np.array([[_f, 0.0, _cx], [0.0, _f, _cy], [0.0, 0.0, 1.0]])
+    H = (K @ R @ np.linalg.inv(K)).astype(np.float32)
+    # **fuzz 发现（2026-09-12）**：本函数此前对 nan / inf / 1e300 会**静默**
+    # 返回一个全 NaN 的单应矩阵——而它是 warp_by_rotation 的底层依赖，
+    # 上游只会在残差里看到 NaN，完全定位不到这里。
+    # 注意：**光查输入有限是不够的**——1e300 是有限值，但在
+    # `np.radians(x)*dt` 与后续矩阵乘法里会溢出。所以这里查的是**结果**。
+    if not np.all(np.isfinite(H)):
+        for nm, v in (("pitch_deg", _p), ("yaw_deg", _y),
+                      ("roll_deg", _r), ("dt", _dt), ("f", _f),
+                      ("cx", _cx), ("cy", _cy)):
+            # 报出是哪个参数导致溢出，而不是笼统说"结果非有限"
+            if not np.isfinite(float(v)) or abs(float(v)) > 1e8:
+                raise NonFiniteError(
+                    f"rotation_homography: 参数 {nm}={v!r} 会让单应矩阵溢出。"
+                    "（量级过大，不是 NaN 也会在计算中溢出——"
+                    "实测 1e300 即如此。）")
+        raise NonFiniteError(
+            "rotation_homography: 单应矩阵含 NaN/Inf，参数组合会导致退化。"
+            f"实测输入 pitch={pitch_deg} yaw={yaw_deg} roll={roll_deg} "
+            f"dt={dt} f={f}")
+    return H
 
 
 def warp_by_rotation(F_prev: np.ndarray, gyro: ArrayLike, dt: float,

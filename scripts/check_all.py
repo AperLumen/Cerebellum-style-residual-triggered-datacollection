@@ -89,6 +89,22 @@ def step_pyright() -> Step:
                               *STRICT_PYRIGHT, *LOOSE_PYRIGHT])
 
 
+def step_fuzz() -> Step:
+    """随机污染探测：确认非法输入要么被契约拦住，要么被明确白名单接受。
+
+    为什么值得常驻：单元测试只能覆盖**想到的**失败模式，而契约加固的价值恰恰
+    在于覆盖没想到的。本步骤用固定的随机种子喂入各类脏值（NaN/Inf/超大/
+    字符串/object dtype/错形状），把结果分成四类——RAISED（好）、
+    SILENT_GOOD（需白名单+理由）、SILENT_BAD（**坏**，悄悄返回垃圾）、
+    RAISED_OTHER（**坏**，抛的不是 ContractError，调用方无法统一处理）。
+
+    退出码非 0 即代表出现后两类。历史上它抓到过 check_min_frames 放行 NaN、
+    rotation_homography 静默产出全 NaN 矩阵、以及 check_scalar 的转换漏出
+    原生 TypeError —— 这些都是单测没覆盖的。
+    """
+    return Step("契约随机污染", [PY, "scripts/fuzz_contracts.py"])
+
+
 def step_engine_smoke() -> Step:
     """引擎端到端冒烟：真的跑一条录制并导出，确认产物存在。
 
@@ -452,9 +468,9 @@ def main() -> int:
         print(f"找不到 venv python: {PY}", file=sys.stderr)
         return 2
 
-    steps: list[Step] = [step_tests(), step_pyright(), step_engine_smoke(),
-                         step_ui_smoke(), step_doc_refs(), step_manifest(),
-                         step_public_edition()]
+    steps: list[Step] = [step_tests(), step_pyright(), step_fuzz(),
+                         step_engine_smoke(), step_ui_smoke(), step_doc_refs(),
+                         step_manifest(), step_public_edition()]
     if not args.skip_pdf:
         steps += [step_generate_pdf(), step_verify_pdf()]
 
@@ -496,6 +512,23 @@ def main() -> int:
                     f"scripts/ 错误数 {len(loose)} != 基线 "
                     f"{KNOWN_PYRIGHT_ERRORS_SCRIPTS}"
                     "（若是有意改动，请更新基线）")
+        elif st.name == "契约随机污染":
+            # 只要读到汇总行就能判断；有问题的明细太长，只在失败时展开
+            tail = st.out.strip().splitlines()[-1] if st.out.strip() else ""
+            print(f"    {tail}")
+            m = re.search(r"静默垃圾 (\d+) \| 错误类型不统一 (\d+) \| "
+                          r"静默待判 (\d+)", st.out)
+            if not m:
+                problems.append("无法解析 fuzz 汇总行（脚本输出格式变了？）")
+            elif st.rc != 0:
+                # 明细：把每个非豁免项列出来（数量通常是个位数）
+                for l in st.out.splitlines():
+                    if any(t in l for t in ("静默垃圾", "SILENT_BAD")):
+                        print("      ✗ " + l.strip())
+                problems.append(
+                    f"出现 静默垃圾{m.group(1)} / "
+                    f"错误类型不统一{m.group(2)} / 静默待判{m.group(3)}"
+                    "——见上方明细")
         else:
             # 其余步骤：rc != 0 即失败，打印输出尾部
             tail = "\n".join(

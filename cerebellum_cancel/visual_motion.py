@@ -67,7 +67,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .contracts import ShapeError, check_positive
+from .contracts import (NonFiniteError, ShapeError,
+                        check_finite_array, check_positive)
 
 # 判定"这一帧的运动估计可信"的最低内点数。低于它认为是纹理不足/前景主导，
 # 宁可报告失败也不给一个会污染统计的假读数。
@@ -88,7 +89,11 @@ def assess_motion(prev_gray: np.ndarray, gray: np.ndarray,
     这是本模块最该被先调用的函数：负结果（见模块文档）表明，在自运动亚像素的
     数据上开补偿是**净亏**。所以先量，再决定开不开。
     """
-    est = (estimator or VisualMotionEstimator()).estimate(prev_gray, gray)
+    # 先归一化再交给 estimate —— estimate 内部虽然也校验，但这里提前一步
+    # 能保证 `assess_motion` 自身作为公共入口的失败类型也是契约异常。
+    est = (estimator or VisualMotionEstimator()).estimate(
+        check_finite_array(prev_gray, "prev_gray"),
+        check_finite_array(gray, "gray"))
     return {
         "ok": est.ok,
         "shift_px": est.shift_px,
@@ -146,19 +151,44 @@ class VisualMotionEstimator:
 
         两帧都必须是 2 维灰度（`(H,W)`）——取彩色会静默降级到只在第一个通道
         上匹配，结果难查。这里显式拒绝。
-        """
-        a = prev_gray
-        if a.ndim != 2 or gray.ndim != 2:
-            raise ShapeError(
-                f"输入必须是 2 维灰度 (H,W)，实得 "
-                f"{prev_gray.shape} / {gray.shape}。彩色输入会静默只在"
-                "第一个通道上匹配，故拒绝。")
-        if prev_gray.shape != gray.shape:
-            raise ShapeError(
-                f"两帧尺寸必须一致，实得 {prev_gray.shape} vs {gray.shape}")
 
+        Raises:
+            ShapeError: 不是 2 维、尺寸不一致、或太小以致 OpenCV 无法工作。
+            NonFiniteError: 含 NaN/Inf（OpenCV 会抛它自己的内部错误，
+                信息里只有构建路径，不可定位——fuzz 实测）。
+        """
+        # **校验顺序很重要**（fuzz 实测）：必须先用契约函数归一化，再碰
+        # `.ndim`/`.shape`。原实现直接写 `prev_gray.ndim`，遇到 None 报
+        # `AttributeError`、遇到 list 也没有明确说法——都是非契约异常，
+        # 调用方无法统一处理。
+        a = check_finite_array(prev_gray, "prev_gray")
+        b = check_finite_array(gray, "gray")
+        if a.ndim != 2 or b.ndim != 2:
+            raise ShapeError(
+                f"输入必须是 2 维灰度 (H,W)，实得 shape {a.shape} / {b.shape}。"
+                "彩色输入会静默只在第一个通道上匹配，故拒绝。")
+        if a.shape != b.shape:
+            raise ShapeError(
+                f"两帧尺寸必须一致，实得 {a.shape} vs {b.shape}")
+        # OpenCV 的 goodFeaturesToTrack 在极小图上会抛内部错误（含它的构建
+        # 路径，对使用者毫无信息量）。这里提前给出可读的原因。
+        h, w = a.shape
+        if h < 8 or w < 8:
+            raise ShapeError(
+                f"图像太小无法做特征匹配（至少 8x8），实得 {a.shape}")
+
+        # **cv2 的 dtype 契约**（这是我上一轮改动引入的真实回归，被既有测试
+        # 抓住）：goodFeaturesToTrack 只接受 CV_8UC1 或 CV_32FC1。上面
+        # check_finite_array 把输入统一转成 float64 —— 那是校验需要的，
+        # 但 float64 传给 cv2 会报
+        # `Assertion failed: src.type() == CV_8UC1 || src.type() == CV_32FC1`。
+        # 所以这里显式转回 uint8（灰度图 0..255 语义）。用 clip 保证 NaN
+        # 已被上面拦掉后不会因溢出回绕（uint8 对负数/超 255 是模运算，会静默
+        # 变成错误值）。
+        pv = np.clip(a, 0, 255).astype(np.uint8)
+        cu = np.clip(b, 0, 255).astype(np.uint8)
         p0 = cv2.goodFeaturesToTrack(
-            prev_gray, self.max_features, self.quality, self.min_distance)
+            pv, self.max_features, self.quality, self.min_distance)
         if p0 is None or len(p0) < 6:
             return MotionEstimate(None, False, 0, 0 if p0 is None else len(p0),
                                   0.0)
@@ -167,7 +197,7 @@ class VisualMotionEstimator:
         # 用 type: ignore 显式记录，而不是改写成不惯用的形式。
         # 注：ignore 必须落在**报错那一行**（参数行），放在函数名行不起作用。
         p1, st, _ = cv2.calcOpticalFlowPyrLK(
-            prev_gray, gray, p0, None)              # type: ignore
+            pv, cu, p0, None)                       # type: ignore
         if p1 is None or st is None:
             return MotionEstimate(None, False, 0, len(p0), 0.0)
 

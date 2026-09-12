@@ -19,7 +19,8 @@ import cv2
 import numpy as np
 
 from .contracts import (ConfigError, InsufficientDataError, NonFiniteError,
-                        ShapeError, check_1d, check_finite_array)
+                        ShapeError, check_1d, check_finite_array,
+                        check_scalar)
 
 
 @dataclass
@@ -147,8 +148,7 @@ def gyro_at(imu: list[ImuSample], idx_hint: int, t: float) -> tuple[np.ndarray, 
         raise ConfigError(
             "gyro_at: IMU 列表为空。返回全零等于假设设备静止——"
             "请由调用方显式决定降级方式（见 engine 的 no_imu 选项）。")
-    if not np.isfinite(t):
-        raise NonFiniteError(f"gyro_at: t 必须是有限标量，实得 {t!r}")
+    t = check_scalar(t, "t", "gyro_at")
     i = min(max(idx_hint, 0), len(imu) - 1)
     while i + 1 < len(imu) and imu[i + 1].t <= t:
         i += 1
@@ -180,9 +180,7 @@ def compensate_rotation(prev_gray: np.ndarray | None, gray: np.ndarray,
     注：``gyro`` 只取前 3 轴；``prev_gray is None``（首帧）返回全零残差，
     这是**有意**的（首帧没有可比的前一帧）。
     """
-    dt = float(dt)
-    if not np.isfinite(dt):
-        raise NonFiniteError(f"compensate_rotation: dt 非有限，实得 {dt!r}")
+    dt = check_scalar(dt, "dt", "compensate_rotation")
     g = check_1d(gyro, "gyro")
     if g.size < 3:
         raise ShapeError(
@@ -191,8 +189,13 @@ def compensate_rotation(prev_gray: np.ndarray | None, gray: np.ndarray,
         raise NonFiniteError(
             "compensate_rotation: gyro 含 NaN/Inf。会产出形状正常但全 NaN 的"
             "残差图，下游无法定位根源。")
+    # **fuzz 发现（2026-09-12）**：原实现对 object-dtype / 字符串数组直接做
+    # `prev_gray.shape` 判等后送进 cv2，抛的是原生 TypeError/ValueError。
+    # 统一经契约函数归一化（顺带拒绝 NaN，cv2 遇 NaN 会给内部错误）。
+    gray = check_finite_array(gray, "gray")
     if prev_gray is None:
         return np.zeros_like(gray, dtype=np.float64)
+    prev_gray = check_finite_array(prev_gray, "prev_gray")
     if prev_gray.shape != gray.shape:
         raise ShapeError(
             f"compensate_rotation: 两帧尺寸必须一致，"

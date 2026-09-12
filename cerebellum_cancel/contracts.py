@@ -98,8 +98,21 @@ def check_finite_array(x: ArrayLike, name: str,
     Raises:
         InsufficientDataError: 空数组且 ``allow_empty=False``。
         NonFiniteError: 含 NaN/Inf。
+        ConfigError: 无法转成数值数组（字符串、object dtype、None 等）。
+
+    **为什么转换要包 try（fuzz 发现）**：``np.asarray("abc", dtype=float)``
+    抛原生 ``ValueError``，``np.asarray(None, dtype=float)`` 抛原生
+    ``TypeError``，object-dtype 数组同理。这些都是**类型不对**，语义上属于
+    ``ConfigError``。原样漏出去会让调用方看到两种不同的异常类型，而契约模块
+    的全部意义就是"失败必须是同一种失败"。
     """
-    a = np.asarray(x, dtype=np.float64)
+    try:
+        a = np.asarray(x, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{name}: 无法转成数值数组，实得 {type(x).__name__} "
+            f"（{_brief(x)}）。字符串/object dtype/None 都不能参与数值校验。"
+        ) from exc
     if a.size == 0 and not allow_empty:
         raise InsufficientDataError(f"{name}: 空数组，无法处理")
     if not np.all(np.isfinite(a)):
@@ -109,6 +122,17 @@ def check_finite_array(x: ArrayLike, name: str,
             "在线统计一旦被污染，后续所有帧的判断都会静默失效——"
             "请在调用前清洗输入，或显式声明该段数据不可用。")
     return a
+
+
+def check_array(x: ArrayLike, name: str, *,
+                allow_empty: bool = False) -> np.ndarray:
+    """把输入归一成 ``float64`` 且**有限**的数组（不检查维度）。
+
+    这是 ``check_finite_array`` 的公开别名，存在意义是给下游模块一个
+    "先把输入变成可信数组"的入口，避免它们各自写裸 ``np.asarray``
+    ——fuzz 实测那正是原生 ``TypeError``/``ValueError`` 漏出的地方。
+    """
+    return check_finite_array(x, name, allow_empty=allow_empty)
 
 
 def check_1d(x: ArrayLike, name: str, expected_len: int | None = None,
@@ -147,9 +171,32 @@ def check_gyro(gyro: ArrayLike, name: str = "gyro") -> np.ndarray:
     return g
 
 
+def _brief(x: Any, limit: int = 60) -> str:
+    """把任意对象渲染成单行短摘要，供错误信息使用（避免打出整个数组）。"""
+    try:
+        r = repr(x)
+    except Exception:  # pragma: no cover - repr 自身失败极罕见
+        return f"<{type(x).__name__}>"
+    r = r.replace("\n", " ")
+    return r if len(r) <= limit else r[:limit] + "…"
+
+
 def check_positive(x: float, name: str, allow_zero: bool = False) -> float:
-    """校验标量为正（或非负）有限值。"""
-    v = float(x)
+    """校验标量为正（或非负）有限值。
+
+    Raises:
+        ConfigError: 非数值（字符串/None/多元素数组）或为负。
+        NonFiniteError: NaN/Inf。
+    """
+    try:
+        v = float(x)
+    except (TypeError, ValueError) as exc:
+        # 多元素数组走 float() 会抛 TypeError；字符串走 float() 抛 ValueError。
+        # 两者都是"类型不对"，统一成 ConfigError（fuzz 发现原实现漏出去）。
+        err = ShapeError if isinstance(x, (np.ndarray, list, tuple)) else ConfigError
+        raise err(
+            f"{name}: 必须是数值标量，实得 {type(x).__name__}（{_brief(x)}）"
+        ) from exc
     if not np.isfinite(v):
         raise NonFiniteError(f"{name}: 必须是有限标量，实得 {x!r}")
     if v < 0 or (v == 0 and not allow_zero):
@@ -158,9 +205,59 @@ def check_positive(x: float, name: str, allow_zero: bool = False) -> float:
     return v
 
 
+def check_scalar(x: Any, name: str, what: str) -> float:
+    """把输入归一成**有限标量**，否则抛出契约异常。
+
+    为什么需要它（fuzz 发现）：加固时图省事写了 ``float(x)`` 或
+    ``np.isfinite(x)``，但这两者对**数组**输入会抛出非契约异常：
+
+    * ``np.isfinite(np.zeros(3))`` 得到数组，放进 ``if`` 报
+      ``ValueError: truth value of an array ... is ambiguous``
+    * ``float(np.zeros(3))`` 报 ``TypeError: only length-1 arrays ...``
+
+    于是调用方看到的是 ``TypeError``/``ValueError``，无法用统一的
+    ``except ContractError`` 处理——而这正是契约模块存在的理由。
+    """
+    if isinstance(x, (np.ndarray, list, tuple)):
+        # **fuzz 发现（2026-09-12，第二轮）**：这个 `np.asarray(..., float64)`
+        # 原先在 try 块**外面**，于是 object-dtype/字符串数组在这里就抛原生
+        # `TypeError`/`ValueError` 了——完全绕过后面的包裹。转置必须也在
+        # try 里，否则"统一成 ConfigError"的承诺在数组输入上不成立。
+        try:
+            arr = np.asarray(x, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                f"{what}: {name} 无法转成数值，实得 {type(x).__name__} "
+                f"（{_brief(x)}）") from exc
+        if arr.size != 1:
+            raise ShapeError(
+                f"{what}: {name} 必须是标量，实得 shape={arr.shape}")
+        x = arr.reshape(()).item()
+    if isinstance(x, bool):
+        x = float(x)
+    try:
+        v = float(x)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{what}: {name} 必须是数值，实得 {x!r}"
+            f"（{type(x).__name__}）") from exc
+    if not np.isfinite(v):
+        raise NonFiniteError(f"{what}: {name} 必须是有限值，实得 {x!r}")
+    return v
+
+
 def check_min_frames(n: int, minimum: int, what: str) -> None:
-    """校验帧数满足某项分析的最低要求。"""
-    if n < minimum:
+    """校验帧数满足某项分析的最低要求。
+
+    **fuzz 发现的真 bug（2026-09-12）**：原实现只写 ``if n < minimum``。
+    当 ``n`` 是 NaN 时，``nan < minimum`` 为 **False**，于是"帧数是 NaN"被
+    当成"帧数够用"放过去；``inf`` 同理。这类值不可能来自正常调用，但一旦
+    出现就说明上游算错了帧数，而**静默通过会让错误结论看起来有依据**。
+    """
+    nf = check_scalar(n, "n", what)
+    if nf < 0:
+        raise ConfigError(f"{what}: 帧数不能为负，实得 {n!r}")
+    if nf < minimum:
         raise InsufficientDataError(
             f"{what}: 需要至少 {minimum} 帧，实得 {n}。"
             "样本不足时'未检出异常'没有统计意义，故拒绝出结论。")

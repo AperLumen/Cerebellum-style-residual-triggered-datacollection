@@ -39,8 +39,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .contracts import (InsufficientDataError, NonFiniteError, check_finite_array,
-                        check_min_frames)
+from .contracts import (InsufficientDataError, NonFiniteError, ShapeError,
+                        check_array, check_finite_array, check_min_frames)
 
 # 检出阈值（沿用 GUIDE §2.3.10 的实测设定）
 SPIKE_SIGMA = 6.0           # 单帧尖峰的 z 阈值（仅用于序列过短时的回退）
@@ -146,6 +146,12 @@ def frozen_baseline_z(err: np.ndarray, n_frozen: int = FROZEN_FRAMES,
     Returns:
         (T,) 逐帧的聚合 z 分数。
     """
+    err = check_array(err, "err")
+    # fuzz：同 spike_threshold——标量输入会在 len() 处抛原生 TypeError。
+    if err.ndim == 0:
+        raise ShapeError(
+            "frozen_baseline_z: err 必须是逐帧序列 (T, ...)，"
+            f"实得 0 维标量 {err!r}。")
     a = check_finite_array(err, "err")
     flat = a.reshape(len(a), -1) if a.ndim > 1 else a.reshape(len(a), -1)
     t = len(flat)
@@ -251,7 +257,14 @@ def spike_threshold(frozen_z: np.ndarray, warmup: int = WARMUP_SKIP,
     * 用**乘性分离**而不是绝对 σ 下限——实测干净段 p99 就有 15–18σ，
       任何绝对尺度（"8σ"）都会变成常见取值，导致干净数据大量误报。
     """
-    z = np.asarray(frozen_z, dtype=np.float64)
+    # fuzz：裸 np.asarray 遇字符串/object dtype 抛原生异常，统一经契约函数。
+    z = check_array(frozen_z, "frozen_z")
+    # fuzz：check_array(0) 会得到 0 维数组，随后 len(z) 抛原生
+    # `TypeError: len() of unsized object`。序列函数必须收到序列。
+    if z.ndim == 0:
+        raise ShapeError(
+            "spike_threshold: frozen_z 必须是逐帧序列 (T,)，"
+            f"实得 0 维标量 {frozen_z!r}。")
     if ref_idx is None:
         idx = reference_indices(len(z), warmup=max(warmup, 1),
                                 min_frames=n_frozen)

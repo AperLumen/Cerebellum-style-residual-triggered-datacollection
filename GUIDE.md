@@ -26,6 +26,7 @@
   - 4.5 `rotwarp` 的输入契约（本模块最该有的那一层）
   - 4.6 `pipeline` 的参数契约：编排层的静默失败模式不同
   - 4.7 自动化兜底：让前六节不退化
+    - 4.7.1 契约随机污染：用随机而不是想象去找 bug
   - 4.8 引擎与 CLI：把零件接成「塞数据进去、出数据集」
   - 4.9 没有 IMU 怎么办：先调研，再决定不做什么
   - 4.10 `io.py`：最后一个没有契约的模块（也是最该有的那个）
@@ -1421,12 +1422,15 @@ make check-all      # 跑完全部再汇总
 PYTHONPATH=. .venv/bin/python scripts/check_all.py
 ```
 
-六个步骤（实测总耗时约 12 s）：
+十个步骤（实测总耗时约 40 s）：
 
 | 步骤 | 检查什么 | 为什么需要 |
 | --- | --- | --- |
-| 单元测试 | 201 passed / 6 既存 errors | 既存失败要**保持**，不是"忽略"——数量对不上就报警，避免既存问题掩盖新问题 |
+| 单元测试 | 288 passed / 6 既存 errors | 既存失败要**保持**，不是"忽略"——数量对不上就报警，避免既存问题掩盖新问题 |
 | 类型检查 | 交付物 0 错误；`scripts/` 不超基线 | 交付物与一次性探查脚本的要求**不同**（见下） |
+| **契约随机污染** | 脏值喂入公共入口，结果分四类 | 单测只能覆盖**想到的**失败模式；契约加固的价值正是覆盖没想到的（见下） |
+| 引擎端到端冒烟 | 真跑一条录制并导出 | 单测用注入式 source，永远碰不到真实解码器/落盘路径 |
+| 前端端到端冒烟 | 起真实 HTTP 服务，比对 UI 数字与引擎 | UI 曾用"同一个 dict 的两个投影"自证，**注入 bug 抓不到**（见下） |
 | 文档引用完整性 | 文档里的路径引用都真实存在 | 这条是**实测逼出来的**：GUIDE/README 曾四处引用 `scripts/eval_weight_value.py`，而那个文件从没被创建 |
 | manifest 一致性 | `manifest.json` 的 `implementation`/`tests`/`enforced_in` 都指向存在的文件 | 防止登记表与现实脱节 |
 | **公开子集一致性** | `public_edition/` 共享文件与主版逐字节一致；其测试隔离可过；无主版硬编码路径 | 该子集曾**默默落后几个月**（缺 6 模块、4 文件漂移）而自身测试全过——无信号的过期（见下） |
@@ -1463,6 +1467,68 @@ PYTHONPATH=. .venv/bin/python scripts/check_all.py
 > 把取舍说明白：子集是**副本不是分支**。任何修改都应先落在主版再同步；
 > 直接改 `public_edition/` 会被守卫判为漂移。这是有意的——两条独立的真值源
 > 必然会分叉。
+
+### 4.7.1 契约随机污染：用随机而不是想象去找 bug
+
+前面所有检查都有一个共同盲区：**它们只能验证我想到了的情况**。而本项目
+最危险的失效模式恰恰是"没想到的输入走到深处"（§4.4 的九处静默失败都是
+这么发现的，但那是人工逐项探针，靠的是想象力）。
+
+`scripts/fuzz_contracts.py` 把这件事自动化：对**每个公共入口**喂入一批
+"脏值"（NaN、±Inf、超大/次正规、字符串、`object` dtype、错形状、空数组…），
+然后按结果的**四种形态**分类：
+
+| 形态 | 含义 | 判定 |
+| --- | --- | --- |
+| `RAISED` | 抛出 `ContractError` 子类 | ✅ 正确（这是契约模块存在的目的） |
+| `SILENT_GOOD` | 安静返回**正常**结果 | ⚠️ 需在 `TARGETS[].allowed` 里写明理由 |
+| `SILENT_BAD` | 安静返回**垃圾**（非有限/空） | ❌ **问题**——静默失败比崩溃危险 |
+| `RAISED_OTHER` | 抛的不是 `ContractError` | ❌ **问题**——调用方无法用统一方式处理 |
+
+**关键设计：白名单必须写明理由。** `allowed` 不是一个忽略列表，而是一个
+字典，每个键对应一段解释（"`bool` 是 `int` 子类，`True==1` 合法"、
+"本函数只判有限性，形状是 `check_1d` 的职责"）。这样"为什么这个能放过"
+是可审计的，而 `# noqa` 式的忽略会随时间腐烂。
+
+**三轮加固的实测结果：**
+
+| 指标 | 初次 | 最终 |
+| --- | --- | --- |
+| 静默垃圾（返回坏值） | 6 | **0** |
+| 错误类型不统一（非 `ContractError`） | 49 | **0** |
+| 静默待判（需人工裁决） | 40 | **0** |
+
+**它抓到的真 bug（都是单测没覆盖的）：**
+
+1. `check_min_frames` 放行 `NaN`——`nan < minimum` 为 `False`，于是"帧数是
+   NaN"被当成"帧数够用"。
+2. `rotation_homography` 对 `1e300` **静默产出全 NaN 矩阵**。教训：光查输入
+   有限是不够的（`1e300` 是有限值），必须查**结果**。
+3. `check_scalar` 的 `np.asarray(..., float64)` 写在 `try` **外面**——于是
+   object/字符串数组在那里就抛原生异常了，"统一成 `ConfigError`"的承诺
+   在数组输入上不成立。
+4. `visual_motion.estimate` 直接写 `prev_gray.ndim`——传 `None` 报
+   `AttributeError`，且 NaN/超大图会在 OpenCV 深处炸出无法定位的内部错误。
+5. `frozen_baseline_z`/`spike_threshold` 收到 0 维标量时，`len()` 抛原生
+   `TypeError`。
+
+> **工具本身也会错。** 第一版 `spike_threshold` 的探针写成了
+> `lambda v: (np.zeros(400),)`——脏值被丢掉了，于是 18 项"静默通过"全是
+> 假警报。报告里的"待判"必须人工复核，不能直接当缺陷清单。
+
+**它自己也引入过一次回归**（被既有测试抓住，值得记录）：加固 `estimate()`
+时我用 `check_finite_array` 归一化输入——它把数组转成 `float64`，而 OpenCV 的
+`goodFeaturesToTrack` 只接受 `CV_8UC1`/`CV_32FC1`，于是抛
+`Assertion failed: src.type() == CV_8UC1`。**校验用的 dtype 和计算用的 dtype
+是两回事**，归一化后必须显式转回 `uint8` 再交给 cv2。
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py        # 人类可读
+PYTHONPATH=. .venv/bin/python scripts/fuzz_contracts.py --json out.json
+```
+
+退出码非 0 即代表存在 `SILENT_BAD`/`RAISED_OTHER`/无理由的 `SILENT_GOOD`。
+它已作为第 3 步接入 `make check`（耗时 0.2 s）。
 
 ```bash
 make check          # 或 scripts/check_all.py

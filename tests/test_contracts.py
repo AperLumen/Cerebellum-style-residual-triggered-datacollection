@@ -20,7 +20,15 @@ from cerebellum_cancel.contracts import (ConfigError, ContractError,
                                          InsufficientDataError, NonFiniteError,
                                          ShapeError, check_1d,
                                          check_finite_array, check_gyro,
-                                         check_min_frames, check_positive)
+                                         check_min_frames, check_positive,
+                                         check_scalar)
+from cerebellum_cancel.rotwarp import rotation_homography
+
+# 下面这组测试**故意**传错类型（字符串/None/错形状）去验证运行时行为。
+# pyright 会正确地在静态层面报错——那正是我们想绕过的：这些调用的重点不是
+# 类型正确，而是"失败时抛的是不是 ContractError"。用 Any 承接即可，
+# 不需要逐行 type: ignore（那会掩盖真正的问题）。
+from typing import Any as _Any
 
 
 # ------------------------------------------------------------------ 异常层级
@@ -418,3 +426,109 @@ def test_pipeline_allows_none_fps_and_valid_crop():
         run_pipeline("/nonexistent/x.mp4", None, imu_offset=-1.5)
     with pytest.raises(OSError):
         run_pipeline("/nonexistent/x.mp4", None, mirror=True)
+
+
+# ---------------------------------------------------------------- 类型垃圾
+# 背景：fuzz 实测发现，契约函数对"类型垃圾"（字符串 / None / object dtype /
+# 多元素数组）曾抛出 Python 原生的 TypeError/ValueError，而不是 ContractError。
+# 这违背了契约模块的核心承诺——"失败必须是同一种失败"。以下把这些情况
+# 逐一钉住，防止回归。
+
+@pytest.mark.parametrize("bad", [
+    "abc",              # 字符串
+    None,               # None
+    np.array([object()] * 4, dtype=object),   # object dtype
+    np.array(["a", "b"]),                     # 字符串数组
+    [1.0, 2.0],         # 多元素 list（不是标量）
+])
+def test_check_scalar_type_garbage_raises_contract_error(bad):
+    """check_scalar 对非数值/非标量必须报 ContractError。"""
+    with pytest.raises(ContractError):
+        check_scalar(bad, "x", "测试")
+
+
+@pytest.mark.parametrize("bad", [
+    ["a", "b"],
+    np.array(["a", "b"]),
+    np.array([object(), object()], dtype=object),
+])
+def test_check_finite_array_type_garbage_raises_contract_error(bad):
+    """check_finite_array 对无法转成数值的输入必须报 ContractError。
+
+    注：object dtype 里放**数字**是可以转的（那是合法的），
+    所以这里用的是放裸 ``object()`` 的数组。
+    """
+    with pytest.raises(ContractError):
+        check_finite_array(bad, "x")
+
+
+def test_check_positive_type_garbage_raises_contract_error():
+    """check_positive 对字符串/None 必须报 ContractError。"""
+    bad1: _Any = "abc"
+    bad2: _Any = None
+    with pytest.raises(ContractError):
+        check_positive(bad1, "x")
+    with pytest.raises(ContractError):
+        check_positive(bad2, "x")
+
+
+def test_rotation_homography_string_params_raise_contract_error():
+    """rotation_homography 的算术参数若为**不可转**的字符串/None，必须是
+    ContractError。
+
+    原实现让 Python 抛 ``TypeError: can't multiply sequence by non-int``。
+
+    注：``'30'`` 这类**可无损转成数值**的字符串是刻意接受的（配置常来自
+    环境变量/CLI），见 `check_scalar` 的 `str_num` 白名单——所以这里用
+    ``'abc'`` 这种真的转不了的。
+    """
+    badS: _Any = "abc"
+    badN: _Any = None
+    numS: _Any = "30"
+    zeroS: _Any = "0"
+    with pytest.raises(ContractError):
+        rotation_homography(badS, 0.0, 0.0, 1 / 30, 42.7, 14.0, 14.0)
+    with pytest.raises(ContractError):
+        rotation_homography(0.0, badN, 0.0, 1 / 30, 42.7, 14.0, 14.0)
+    # 反向护栏：可转的数值字符串**必须**继续被接受（否则配置从 CLI 来就废了）
+    H = rotation_homography(numS, zeroS, zeroS, 1 / 30, 42.7, 14.0, 14.0)
+    assert H.shape == (3, 3)
+
+
+def test_compensate_rotation_type_garbage_dt_raises_contract_error():
+    """compensate_rotation 的 dt 若为 object/字符串数组，必须报 ContractError。"""
+    from cerebellum_cancel.io import compensate_rotation
+    img = np.zeros((8, 8))
+    gyro = np.zeros(3)
+    badO: _Any = np.array([object()] * 4, dtype=object)
+    badS: _Any = np.array(["a"] * 4)
+    with pytest.raises(ContractError):
+        compensate_rotation(img, img, gyro, badO)
+    with pytest.raises(ContractError):
+        compensate_rotation(img, img, gyro, badS)
+
+
+def test_integrity_sequence_funcs_reject_scalar():
+    """0 维标量传给逐帧序列函数，必须是 ContractError（不能是 len() 的 TypeError）。"""
+    from cerebellum_cancel.integrity import frozen_baseline_z, spike_threshold
+    badZ: _Any = 0
+    badE: _Any = 0.0
+    with pytest.raises(ContractError):
+        spike_threshold(badZ)
+    with pytest.raises(ContractError):
+        frozen_baseline_z(badE)
+
+
+def test_visual_motion_estimate_rejects_bad_inputs():
+    """estimate 对 None / NaN / 过小图的失败类型统一为 ContractError。"""
+    from cerebellum_cancel.visual_motion import VisualMotionEstimator
+    est = VisualMotionEstimator()
+    img = np.zeros((32, 32))
+    _ = img
+    badN: _Any = None
+    with pytest.raises(ContractError):
+        est.estimate(badN, img)
+    with pytest.raises(ContractError):
+        est.estimate(np.full((32, 32), np.nan), img)
+    with pytest.raises(ContractError):
+        est.estimate(np.zeros((4, 4)), np.zeros((4, 4)))   # 太小
