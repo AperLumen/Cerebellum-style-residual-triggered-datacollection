@@ -614,12 +614,25 @@ def main() -> int:
         print("找不到 xelatex，只生成了 .tex", file=sys.stderr)
         return 2
 
+    # **可复现构建**：PDF 内嵌 CreationDate/ModDate，默认取当前时间，于是每次
+    # 重建都产生字节不同的产物——即使正文一字未改。实测：内容逐字相同
+    # （47 页、extract_text 完全一致）而 git 仍报 GUIDE.pdf 已修改。
+    # 由于 `make check` 每次都会重建，这会让工作区永远带着一个假改动，
+    # 真正的文档变更反而淹没在噪声里。
+    #
+    # 解法是标准机制 SOURCE_DATE_EPOCH：TeX Live 与多数工具链都遵守它，
+    # 用它固定时间戳。取一个固定值（本指南首次发布日）而不是"当前时间"，
+    # 这样构建产物只取决于输入内容。
+    env = dict(os.environ)
+    env.setdefault("SOURCE_DATE_EPOCH", "1789257600")   # 2026-09-12 00:00 UTC
+    env.setdefault("FORCE_SOURCE_DATE", "1")            # 让 TeX 真正采用该值
+
     # 两遍：第一遍收集目录/书签，第二遍写入页码
     for run in (1, 2):
         p = subprocess.run(
             [xelatex, "-interaction=nonstopmode", "-halt-on-error",
              os.path.basename(TEX)],
-            cwd=ROOT, capture_output=True, text=True)
+            cwd=ROOT, capture_output=True, text=True, env=env)
         if p.returncode != 0:
             print(f"xelatex 第 {run} 遍失败", file=sys.stderr)
             tail = "\n".join(p.stdout.splitlines()[-40:])

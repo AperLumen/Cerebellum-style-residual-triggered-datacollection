@@ -23,3 +23,8 @@ guide.toc
 # 要分发给别人请用 `git archive`，不要提交快照 tar。
 cerebellum_cancel_tech.tar.gz
 *.tar.gz
+
+# 引用的论文原文（第三方版权 PDF）：**仅作本地参考，不入库**。
+# 两篇曾随初始提交进来（共 41MB，占仓库体积的 95%），现已从索引移除；
+# 本地文件保留。引用请用 DOI/arXiv 链接，不要随仓库分发全文。
+s41586-*.pdf
