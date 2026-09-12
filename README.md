@@ -8,6 +8,42 @@ can predict**. The pipeline learns a "negative image" of the sensory
 consequences of the rig's own motion (corollary discharge = IMU) and only
 records the residual — the unexpected.
 
+## How to read the claims here (first, and it matters)
+
+This README contains many sentences like "the residual does not carry event
+information" or "the synthetic advantage does not transfer". **They read like
+properties of an object, but all of them are readings taken under a protocol.**
+We have **not** measured "what the residual is". What we measured is the tuple:
+
+```
+⟨ residual , specific label definition , sampling/budget protocol , criterion , data distribution ⟩ → a number
+```
+
+**Change any item in the tuple and the number may move**; a conclusion is only
+responsible for **that one tuple**. For example:
+
+| As written | What it actually is |
+| --- | --- |
+| "the residual does not carry event information" | under **frame-level binary, 1–8 s coarse intervals** it carries no information for the **training-value / gating** criteria |
+| "the home-regime hypothesis does not hold" | on **those 10 segments**, **LOO×25 seed**, with **AP**, cerebellum ≈ uniform |
+| "'more motion, more value' falsified" | on **those 4 segments (p95 71–75°/s)** the gyro warp loses to naive — not "at all motion scales" |
+
+**This is not a disclaimer, it is a precision requirement.** Both of these hold:
+
+1. **How wide the tuple is decides how strong the claim is**: some readings are
+   strong ("cross-scene below chance" is hard to rescue at any label
+   granularity), some are much weaker ("oracle is best" is +0.070 on 5 segments
+   and only +0.036 on 10).
+2. **But you also cannot dismiss a result as "protocol-dependent, so maybe a
+   different protocol works"**: some protocol dimensions have been tried and
+   closed (label granularity, target definition, signal choice, readout), and
+   **the independent evidence lands in the same place** — at that point "the
+   boundary is real" is justified. The key is to **list the dimensions that were
+   tried**, not to mumble "unproven".
+
+Every negative conclusion here should be able to answer "which tuple item could
+change this, and has it been tried?". See GUIDE.md §2.0 for the details.
+
 ## The mapping
 
 | Electric fish ELL (paper) | This prototype |
