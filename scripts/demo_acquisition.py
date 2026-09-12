@@ -32,6 +32,7 @@ from cerebellum_cancel.core import TriggerConfig
 from cerebellum_cancel.eval import evaluate
 from cerebellum_cancel.featmap_cancel import CancelConfig
 from cerebellum_cancel.io import gyro_at, load_imu_csv
+from cerebellum_cancel.record import RecordSink, read_record
 
 # GUIDE §1.2 成本账（本机 MPS 实测）：冻结 backbone 前 3 段 0.827 ms/帧，
 # 像素管线核心（warp+统计+触发）0.171 ms/帧
@@ -68,6 +69,8 @@ def main():
                     help="录制目录（video.mp4 + imu.csv + events.json）")
     ap.add_argument("--out", default="runs/acquisition_demo.json")
     ap.add_argument("--peak-img", default="runs/acquisition_demo_peak.png")
+    ap.add_argument("--record", default="runs/acquisition_demo.cmcir",
+                    help="记录格式 v2 落盘路径（空字符串 = 不落盘）")
     ap.add_argument("--max-frames", type=int, default=0,
                     help=">0 时只跑前 N 帧（调试用）")
     args = ap.parse_args()
@@ -94,25 +97,38 @@ def main():
     keeps, surprises = [], []
     peak = {"surprise": -1.0, "t": 0.0, "z_map": None, "frame": None}
     hint, idx, t0 = 0, 0, time.perf_counter()
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        t = idx / fps
-        gyro, hint = gyro_at(imu, hint, t)
-        out = layer.step(frame[:, :, ::-1].copy(), gyro, t)  # BGR -> RGB
-        keeps.append(out["keep"])
-        surprises.append(out["surprise"])
-        if out["surprise"] > peak["surprise"]:
-            peak = {"surprise": out["surprise"], "t": t,
-                    "z_map": out["z_map"], "frame": frame}
-        idx += 1
-        if args.max_frames and idx >= args.max_frames:
-            break
-    cap.release()
+    # 记录格式 v2：决策逐帧落盘（默认 keep_only —— 只对触发片段留 z 图）。
+    # 与 JSON 报告并行：JSON 给人和脚本看，.cmcir 给下一次录制续采
+    # （统计侧车）和精确复核。
+    sink = (RecordSink(args.record, layer)
+            if args.record else None)
+    clips: list[tuple[float, float]] = []
+    record_stats: dict | None = None
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t = idx / fps
+            gyro, hint = gyro_at(imu, hint, t)
+            out = layer.step(frame[:, :, ::-1].copy(), gyro, t)  # BGR -> RGB
+            if sink is not None:
+                sink.write(out)
+            keeps.append(out["keep"])
+            surprises.append(out["surprise"])
+            if out["surprise"] > peak["surprise"]:
+                peak = {"surprise": out["surprise"], "t": t,
+                        "z_map": out["z_map"], "frame": frame}
+            idx += 1
+            if args.max_frames and idx >= args.max_frames:
+                break
+        clips = layer.finalize()
+    finally:
+        cap.release()
+        if sink is not None:
+            record_stats = sink.close(clips=clips)
     wall_s = time.perf_counter() - t0
 
-    clips = layer.finalize()
     duration = idx / fps
     keep_segs = compress_keeps(keeps, fps)
     stored_frames = float(np.mean(keeps)) if keeps else 0.0
@@ -136,6 +152,28 @@ def main():
         "peak": {"t": round(peak["t"], 3), "surprise": peak["surprise"]},
         "ground_truth_events": [list(e) for e in events],
     }
+    if record_stats is not None:
+        # 记录格式的字节账：payload 只含逐帧帧块（一次性头/页脚/侧车另计）
+        with read_record(args.record) as rec:
+            n_z = int(sum(rec.keep))
+            clips_from_record = rec.clips_for_keep
+            payload_per_frame = rec.bytes_per_frame
+        report["record"] = {
+            "path": args.record,
+            "bytes_per_frame_file": round(payload_per_frame, 2),
+            "bytes_per_frame_payload":
+                round(record_stats["payload_bytes_per_frame"], 2),
+            "payload_bytes": int(record_stats["payload_bytes"]),
+            "fixed_bytes": int(record_stats["fixed_bytes"]),
+            "total_bytes": int(record_stats["bytes"]),
+            "z_frames_stored": n_z,
+            # 决策回放一致性：记录里的 keep 复算出的片段 == 在线 keep 片段。
+            # 对照的是 keep_segments（逐帧决策压缩版），不是 clips——clips
+            # 是触发器的回滞片段，右端点由 post_roll 决定，两者口径不同。
+            "keep_roundtrip_match": (
+                [(round(a, 3), round(b, 3)) for a, b in clips_from_record]
+                == [(round(a, 3), round(b, 3)) for a, b in keep_segs]),
+        }
     with open(args.out, "w") as fp:
         json.dump(report, fp, ensure_ascii=False, indent=1)
 
@@ -150,6 +188,13 @@ def main():
           f"(事件重合: recall {ev.recall:.2f}, precision {ev.precision:.2f})")
     print(f"surprise 峰值 {peak['surprise']:.1f} @ t={peak['t']:.2f}s "
           f"-> {args.peak_img}")
+    if record_stats is not None:
+        rec_info = report["record"]
+        print(f"记录格式 v2 -> {args.record}")
+        print(f"  逐帧载荷 {rec_info['bytes_per_frame_payload']:.0f} B/帧"
+              f"（含一次性开销 {rec_info['bytes_per_frame_file']:.0f} B/帧），"
+              f"z 图落盘 {rec_info['z_frames_stored']}/{idx} 帧")
+        print(f"  决策回放一致: {rec_info['keep_roundtrip_match']}")
     est_ms = idx * (MS_BACKBONE + MS_PIPELINE)
     print(f"\n成本估算: {idx} 帧 x {MS_BACKBONE + MS_PIPELINE:.3f} ms/帧 "
           f"(backbone {MS_BACKBONE} + 管线 {MS_PIPELINE}, GUIDE §1.2)"

@@ -230,10 +230,24 @@ def main():
             "against DIS flow (translation columns are sign-folded)")
     if args.event_verbs:
         note += "; events = event-verbs intervals"
+    # 显式记录符号约定（这是**实测标定出来的**，不是默认值）：
+    # calibrate_signs 强制 corr(-f·tan(g), dx) > 0，等价于把 pitch/yaw 都翻过
+    # 一次；roll 参与的标定为 0（该函数只看轴 0/1）。任何新的 warp 实现
+    # （如 rotwarp 的旋转单应）必须按这里的约定读 gyro，否则会得到相反结论
+    # ——这个坑实测踩到过（见 MEMORY_FORMAT §8.7、runs/rotwarp_aoe.json）。
     meta = {"fps": fps, "seconds": n / fps, "events": events,
             "f_map": f_map, "source": os.path.basename(args.src.rstrip("/")),
             "trans_scale": trans_scale,
             "event_verbs": args.event_verbs or None,
+            "gyro_unit": "deg/s",
+            "gyro_order": "pitch,yaw,roll",
+            "gyro_axis_signs": [1, -1, -1],
+            "gyro_sign_note":
+                "存储约定：rotwarp.signs_for() 对 aoe 路径返回 (1,-1,-1)。"
+                "真机 IMU 数据（prep_real_imu）是 (1,1,1)——两者目标相反，"
+                "因为本脚本的 calibrate_signs 强制 corr(-f*tan(g),dx)>0，"
+                "而那边只取 |corr| 最大。改动前先跑 run_rotwarp_aoe.py 的"
+                "符号扫描确认。",
             "note": note}
     with open(f"{args.out}/events.json", "w") as f:
         json.dump(meta, f, indent=2)

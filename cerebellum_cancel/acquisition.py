@@ -118,6 +118,7 @@ class AcquisitionLayer:
              "in_clip": bool,       # 与 keep 同源（触发器当前输出）
              "surprise": float,     # cancel 的 max-|z|（原始终残差强度）
              "score": float,        # 喂给触发器的 maxcell z^2（已发布读出）
+             "t": float,            # 本帧时间戳（秒，原样回传）
              "z_map": (H,W) 残差图,  # z 按通道求 RMS，峰值帧可叠加原帧可视化
              "clips": list}         # 当前已封闭的片段 [(start, end), ...]
         """
@@ -132,6 +133,7 @@ class AcquisitionLayer:
             "in_clip": in_clip,
             "surprise": float(out["surprise"]),
             "score": score,
+            "t": float(t),
             "z_map": np.sqrt((z ** 2).mean(axis=0)).astype(np.float32),
             "clips": list(self.trigger.clips),
         }
