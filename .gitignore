@@ -6,3 +6,20 @@ runs/
 __pycache__/
 *.pyc
 third_party/
+
+# LaTeX 中间产物（GUIDE.pdf 是可发布的成品，要入库；
+# guide.tex 由 scripts/build_guide_pdf.py 重新生成，不入库）
+guide.tex
+guide.aux
+guide.log
+guide.out
+guide.toc
+*.aux
+*.log
+*.out
+*.toc
+
+# 临时打包产物：内容与工作区重复，且无人引用。
+# 要分发给别人请用 `git archive`，不要提交快照 tar。
+cerebellum_cancel_tech.tar.gz
+*.tar.gz
