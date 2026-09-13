@@ -1,0 +1,57 @@
+% 图 4：记录格式 v2 的容器布局（字节带）。
+%
+% 三个设计点用图表达比文字清楚得多：
+%   ① 头部**自描述**（fps/f_map/shape/量化参数全在里面），读出端不再靠约定；
+%   ② 逐帧块带**长度前缀** → 顺序重放不需要索引，掉电截断也能读出全部完整帧；
+%   ③ 决策标量（score，float64）与 z 图（有损）分属不同载荷，前者无损。
+%
+% 画幅由 scripts/build_figures.py 实测，不在这里声明。
+\begin{tikzpicture}
+
+  % ================= 上半：容器整体 =================
+  \node[grouplab, anchor=west] at (0, 0.55) {容器整体（顺序写，崩溃安全）};
+
+  \tikzset{seg/.style={draw, line width=0.5pt, minimum height=8mm,
+                       align=center, font=\scriptsize, inner sep=2pt}}
+  \node[seg, fill=cStore!12, draw=cStore!70!black, minimum width=1.9cm] (magic) at (0,0)
+    {MAGIC\\\texttt{CMCIREC2}};
+  \node[seg, fill=cStore!6, draw=cStore!50!black, minimum width=1.5cm, right=0mm of magic] (fo)
+    {footer\_off\\{\tiny u64}};
+  \node[seg, fill=cStore!6, draw=cStore!50!black, minimum width=1.3cm, right=0mm of fo] (hl)
+    {header\_len\\{\tiny u32}};
+  \node[seg, fill=cCam!10, draw=cCam!55!black, minimum width=3.0cm, right=0mm of hl] (hj)
+    {header\_json\\{\tiny 自描述}};
+  \node[seg, fill=white, draw=black!45, dashed, minimum width=3.6cm, right=0mm of hj] (pl)
+    {payload\\{\tiny 逐帧块 × n}};
+  \node[seg, fill=cImu!12, draw=cImu!60!black, minimum width=3.5cm, right=0mm of pl] (ft)
+    {FOOTER + bundle\\{\tiny 统计侧车 (npz)}};
+
+  \draw[dropflow] (pl.north) ++(0,1mm) -- ++(0,4mm);
+
+  % ================= 中段：单帧块展开 =================
+  \node[grouplab, anchor=west] at (0, -2.2) {单个帧块（长度前缀 → 顺序重放不需要索引）};
+
+  \node[seg, fill=black!5, draw=black!45, minimum width=1.7cm] (bl) at (0,-3.0)
+    {block\_len\\{\tiny u32}};
+  \node[seg, fill=black!5, draw=black!45, minimum width=1.5cm, right=0mm of bl] (sc)
+    {scale\\{\tiny f32}};
+  \node[seg, fill=black!5, draw=black!45, minimum width=1.4cm, right=0mm of sc] (fg)
+    {flags\\{\tiny u8}};
+  \node[seg, fill=black!5, draw=black!45, minimum width=1.7cm, right=0mm of fg] (nc)
+    {n\_coded\\{\tiny u32}};
+  \node[seg, fill=cRes!10, draw=cRes!60!black, minimum width=3.2cm, right=0mm of nc] (cd)
+    {coded bytes\\{\tiny int8+deadband+zlib}};
+  \node[seg, fill=cCam!10, draw=cCam!55!black, minimum width=2.6cm, right=0mm of cd] (jp)
+    {jpg（可选）\\{\tiny 视频载荷}};
+
+  % 只有 keep 的帧才有 z 图 —— 这是"不存它能预测的东西"在格式层的落地
+  \draw[sideflow] (cd.south) -- ++(0,-5mm) node[note, below, text width=6.5cm]
+    {只在 \texttt{keep} 的帧上出现——\\未触发帧只花 \textasciitilde27 字节（标量）};
+
+  % ================= 下段：score 无损 / z 图有损 =================
+  \node[grouplab, anchor=west] at (0, -5.4) {两个载荷的可信度不同（刻意，不是妥协）};
+  \node[note, anchor=west, text width=16cm] at (0, -5.9)
+    {\textbf{\texttt{score}}\ 以 float64 \textbf{无损}存盘 → 决策可逐位重放；\quad
+     \textbf{z 图}是 int8 有损诊断件 → \textbf{刻意不从它反推决策}。};
+
+\end{tikzpicture}

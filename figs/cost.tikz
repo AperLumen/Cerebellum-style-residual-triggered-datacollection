@@ -1,0 +1,57 @@
+% 图 5：成本账（对数横轴）。全部数字来自 runs/ 的实测，见 GUIDE §1.2。
+%
+% 为什么要画：0.032 ms 与 4.456 ms 相差 139 倍，写成文字读者没有尺度感。
+% 对数轴让"IMU 副本几乎免费、每帧光流贵两个数量级"一眼可见——这正是这套
+% 东西能 always-on 而光流方案不能的原因。
+%
+% **TikZ 不会自动做对数**：下面所有 x 坐标都是手算的 log10 值，条形长度也是
+% log10(值)，轴的刻度另标实际数字。加新行时必须自己算 log10。
+%
+% 画幅由 scripts/build_figures.py 实测，不在这里声明。
+\begin{tikzpicture}[x=2.15cm]
+
+  % log10 刻度位置（手算）：0.01→-2, 0.1→-1, 1→0, 10→1
+  \def\xlo{-2.0}
+  \def\xhi{1.0}
+
+  % ---------------- 轴 ----------------
+  \draw[black!55, line width=0.6pt] (\xlo, 0) -- (\xhi, 0);
+  \foreach \v/\lg in {0.01/-2, 0.1/-1, 1/0, 10/1} {
+    \draw[black!55, line width=0.5pt] (\lg, 0) -- (\lg, -0.10);
+    \node[font=\scriptsize, text=black!65, anchor=north] at (\lg, -0.10) {\v};
+  }
+  \node[font=\scriptsize, text=black!55, anchor=north west, align=left]
+    at (\xlo, -0.52) {对数刻度：每格一个数量级\\单位 ms/帧};
+
+  % ---------------- 条形 ----------------
+  % 行格式：y / 值 / log10(值) / 颜色 / 标签
+  \foreach \y/\val/\lg/\col/\lab in {%
+    0.85/0.032/-1.495/cImu/{IMU 陀螺副本（\texttt{gyro shift}）},
+    1.85/0.171/-0.767/cPred/{像素管线核心：warp+网格+可塑性+触发},
+    2.85/0.827/-0.0825/cCam/{冻结 backbone 前向（MobileNetV3[:3]，MPS）},
+    3.85/3.813/0.5813/cRes/{DIS 光流 320$\times$240},
+    4.85/4.456/0.6490/cRes/{光流取消完整步}
+  } {
+    \fill[\col!40] (\xlo, \y - 0.14) rectangle (\lg, \y + 0.14);
+    \draw[\col!85!black, line width=0.5pt]
+      (\xlo, \y - 0.14) rectangle (\lg, \y + 0.14);
+    % 标签放条形上方、对齐轴起点，避免左侧留出大片空白
+    \node[font=\scriptsize, anchor=west, text=black!85]
+      at (\xlo, \y + 0.18) {\lab};
+    \node[font=\scriptsize, anchor=west, text=black!70]
+      at (\lg + 0.05, \y) {\val};
+  }
+
+  % ---------------- 标注：最便宜的那个 ----------------
+  \draw[sideflow] (-1.495, 0.99) -- ++(0.0, 0.22)
+    node[note, above, anchor=south, xshift=1.9cm, text width=7.2cm]
+    {\textbf{便宜到能 always-on}：\texttt{0.032\,ms} 约占\\30\,fps 帧预算的 \textbf{0.1\%}};
+
+  % ---------------- 结论条 ----------------
+  \node[font=\scriptsize, text=black!78, anchor=north west, text width=16cm]
+    at (\xlo, -0.62)
+    {\textbf{读法：}IMU 副本比"每帧跑光流"便宜约 \textbf{139}$\times$；
+     即使把 backbone 前向（0.827\,ms）也算进采集层，全程仍只要
+     \textbf{约 1.0\,ms/帧}——30\,fps 预算的 \textbf{3\%}。};
+
+\end{tikzpicture}

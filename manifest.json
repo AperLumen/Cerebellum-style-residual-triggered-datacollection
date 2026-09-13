@@ -305,14 +305,14 @@
   {
    "path": "runs/downstream_aoe_cv.json",
    "producer": "scripts/run_downstream_aoe_cv.py",
-   "note": "Robust version of the real-data downstream value experiment: 12 Open-AoE segments, 3-fold cross-segment CV x 35 seeds = 105 runs per method, 9 verb classes (fold/grasp/hold/insert/lift/set_down/thread/unfold/wipe) one-vs-rest logistic heads. Rebuilds data/aoe/verbs.json over the 12 segments.",
-   "headline": "NEGATIVE with stats: cerebellum stored 16.0% mAP 0.162+-0.077 ivRec 0.67+-0.12 vs uniform(1x) 0.173+-0.082, oracle (13.2%) 0.164+-0.088 — all mAP within 1 sigma. 'No transfer' is now a statistical conclusion, not a single-split observation."
+   "note": "Robust version of the real-data downstream value experiment: 12 Open-AoE segments, 3-fold cross-segment CV x 35 seeds = 105 runs per method, 9 verb classes (fold/grasp/hold/insert/lift/set_down/thread/unfold/wipe) one-vs-rest logistic heads. Rebuilds data/aoe/verbs.json over the 12 segments. Includes an all(100%) full-budget baseline (added 2026-09-13).",
+   "headline": "RETRACTED READING, CORRECTED 2026-09-13: the all(100%) row shows storing 100% of frames scores 0.166 vs 0.176 at the 8% budget — 12x more data buys NOTHING, so this task cannot rank selection quality at all. The 1-sigma overlap is evidence about a broken yardstick, not about the trigger. The oracle here was also degenerate: 'verb-annotated frames' cover 48-100% of the data, so 'pick by ground truth' collapsed into 'pick at random' (hence oracle 0.164 < uniform 0.176). What IS confirmed on real video (GUIDE 2.3.11): the compensation mechanism works (shuffling/sign-flipping the gyro turns a +0.045 gain into -0.063/-0.065, 10/11 segments become 1/11) and the filter selects as intended (84% of frames dropped, downstream still finds actions in 67% of intervals)."
   },
   {
    "path": "runs/downstream_event_results.json",
    "producer": "scripts/train_downstream_event.py",
-   "note": "Sparse physical event regime check (GUIDE 2.3.7): 10 Open-AoE segments with drop/throw/toss/break verbs (5 original desktop-level + 5 high-motion gyro p95 23-75 deg/s selected by scripts/select_event_segments.py), binary event-frame detection from atomic-action intervals, leave-one-segment-out x 25 seeds = 250 runs per method. 5-segment version was overwritten by this run.",
-   "headline": "NEGATIVE, pinned: cerebellum (23.4% stored) AP 0.108+-0.094 ~= uniform(1x) (23.6%) 0.104+-0.084; oracle (7.9%) best at 0.144+-0.128 but margin shrank vs the 5-seg run (0.204) and evRec no longer leads — kinetic unpredictability as an importance signal is confirmed ineffective on real egocentric data (10 segs, 250 runs, desktop-to-high-motion); the translation-check (runs/trans_eval_data_aoe_event_val.json) closed the escape route: residual noise is world motion (hands), GT translation explains nothing."
+   "note": "Sparse physical event regime check (GUIDE 2.3.7): 10 Open-AoE segments with drop/throw/toss/break verbs (5 original desktop-level + 5 high-motion gyro p95 23-75 deg/s selected by scripts/select_event_segments.py), binary event-frame detection from atomic-action intervals, leave-one-segment-out x 25 seeds = 250 runs per method. Includes an all(100%) full-budget baseline (added 2026-09-13). The 5-segment version is preserved as runs/downstream_event_5seg.json.",
+   "headline": "CLEAN NEGATIVE (yardstick verified): cerebellum (23.4% stored) AP 0.108+-0.094 ~= uniform(1x) (23.6%) 0.104+-0.084, while oracle reaches 0.144 with only 7.9% storage — 1/13 the data beats the all(100%) baseline of 0.118, so the truth signal IS effective and the table does have discriminating power (unlike GUIDE 2.3.6). Kinetic unpredictability as an importance signal is therefore confirmed ineffective on real egocentric data (10 segs, 250 runs, desktop-to-high-motion); the translation-check (runs/trans_eval_data_aoe_event_val.json) closed the escape route: residual noise is world motion (hands), GT translation explains nothing."
   },
   {
    "path": "runs/flow_eval_event.json",
@@ -325,6 +325,12 @@
    "producer": "scripts/run_trans_eval_event.py",
    "note": "Event-segment translation check (roadmap item 1): GT camera-frame translation from the AM trajectory is exported in data/aoe_event imu.csv; rotation vs rotation+constant-depth translation warp on featmaps, with frame residual decomposed inside/outside annotated event intervals. No frames needed.",
    "headline": "NEGATIVE + diagnosis: gyro_trans is worse than gyro on every segment, inside AND outside event intervals (mean calm 0.0679 -> 0.0704); residual inside events ~= outside (0.197 vs 0.193). The event-regime noise is WORLD motion (hands), not egomotion — translation modeling cannot fix 2.3.7, and the flow-arbiter veto experiment (roadmap item 2) is absorbed: flow can only veto camera-motion-explainable candidates, and GT translation already fails to explain the residual."
+  },
+  {
+   "path": "runs/downstream_event_5seg.json",
+   "producer": "scripts/train_downstream_event.py --limit 5",
+   "note": "The original 5-segment desktop-level event subset, preserved separately (2026-09-13) because the 10-segment run used to overwrite it. Re-run with --limit 5 to reproduce; numbers match the published 5-seg table exactly, plus the all(100%) baseline added the same day.",
+   "headline": "oracle (12.4% stored) AP 0.204 vs all(100%) 0.153 — the oracle uses 1/8 the data and wins clearly, so this table HAS discriminating power. cerebellum (43.4%) vs uniform(1x) (44.0%) tie at 0.134 — a clean negative result, not a broken yardstick. Use this file when citing the historical 5-segment table; use downstream_event_results.json for the 10-segment version."
   },
   {
    "path": "runs/downstream_event_zreadout.json",
@@ -466,24 +472,73 @@
    "headline": "Even WITH labels the event-moment signal is weak, and it does not transfer across scenes. Cross-scene LOO: frame AUC 0.478 (3/10 segments above 0.5, p=0.34) and AUC(bounds) 0.445 (2/10, p=0.11) - i.e. BELOW chance, because kNN neighbours match similar scene/hand appearance rather than event-ness; measured diagnostic on seq_005 shows frames with a nonzero score have a LOWER event rate (0.030) than frames with score exactly zero (0.0475), and the score is near-binarized. A hypothesis was tested and FALSIFIED on the way: label-prior shift (pool base rate minus segment base rate) correlates with AUC at r=+0.101, the wrong sign for that explanation. Adding the temporal channels changes nothing (raw+time AUC 0.478, delta on bounds +0.005, 8/10 segments positive but p=0.11). Within-scene (optimistic, interleaved blocks): AUC 0.589 (6/7 segments, p=0.13), capture@5% 0.333, onset capture 0.188. So the ceiling for a LABELED same-scene gate is about 0.59 AUC, and cross-scene is worse than random - meaning the bottleneck is not signal processing but the learnability of 'event moment' from 1-8 s coarse intervals with frame-level binary targets. Recommended: close the gate line; a future attempt needs finer supervision, not a better filter. Design note recorded honestly: the first within-scene attempt used a first-half/second-half split and was WRONG for this data - events are bunched, so 6 of 10 segments have zero event frames in the second half, leaving the pool without positives and degenerating the score to a constant (AUC exactly 0.500, no frame above threshold)."
   }
  ],
- "figures": [
-  {
-   "path": "runs/aoe_peaks",
-   "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
+ "doc_figures": {
+  "doc": "GUIDE.md §0 (overview), §0.3 (arch), §0.5 (verdicts), §1.1 (mapping), §1.2 (cost), §2.3.1 (flowlimit), §2.3.3 (zdist, resolution), §2.3.8 (gate), §4.1 (bytes, record_format), §4.8.2 (two_layer)",
+  "sources": [
+   "figs/overview.tikz",
+   "figs/arch.tikz",
+   "figs/mapping.tikz",
+   "figs/cost.tikz",
+   "figs/record_format.tikz",
+   "figs/two_layer.tikz",
+   "scripts/make_data_figures.py#bytes",
+   "scripts/make_data_figures.py#verdicts",
+   "scripts/make_data_figures.py#gate",
+   "scripts/make_data_figures.py#zdist",
+   "scripts/make_data_figures.py#resolution",
+   "scripts/make_data_figures.py#flowlimit"
+  ],
+  "styles": [
+   "figs/_preamble.tex"
+  ],
+  "builder": "scripts/build_figures.py",
+  "products": [
+   "figs/overview.png",
+   "figs/arch.png",
+   "figs/mapping.png",
+   "figs/cost.png",
+   "figs/record_format.png",
+   "figs/two_layer.png",
+   "figs/bytes.png",
+   "figs/verdicts.png",
+   "figs/gate.png",
+   "figs/zdist.png",
+   "figs/resolution.png",
+   "figs/flowlimit.png",
+   "figs/overview.pdf",
+   "figs/arch.pdf",
+   "figs/mapping.pdf",
+   "figs/cost.pdf",
+   "figs/record_format.pdf",
+   "figs/two_layer.pdf"
+  ],
+  "description": "Scientific figures. One TikZ source each produces BOTH a vector PDF (embedded in GUIDE.pdf) and a PNG (displayed by the READMEs on GitHub); documents reference the .png with standard Markdown image syntax and build_guide_pdf.py substitutes the .pdf. Rendering route is TikZ-primary (no matplotlib, no mermaid, no graphviz, no Node: none are installed and all would add dependencies to a zero-dependency project); data plots, when added, will use PIL, which is already a dependency.",
+  "frame_size_policy": "MEASURED, not declared. build_figures.py typesets each figure on A4 once, reads the true box dimensions via \\sbox, then re-typesets on exactly that paper size plus PAD_CM. Hand-declaring a size means guessing, and guessing too small silently crops the figure.",
+  "silent_failures_plugged": [
+   "Asymmetric edge cropping: \\parindent is reset by ctex at \\begin{document} and \\topskip=0 pins the baseline to the top edge, so content hugged the left edge and lost its top band -- visually indistinguishable from 'the figure was drawn that way'. The render template centers in both axes with \\vbox to \\textheight + \\centerline.",
+   "Transparent background: sips renders PDF to a PNG with an alpha channel and fully transparent background. On GitHub in dark mode the transparent area turns dark and the black text disappears -- the figure looks fine in light mode and is invisible in dark mode. PNGs are flattened onto white.",
+   "Display P3 color profile: sips writes a Display P3 description, so browsers reinterpreting the same RGB numbers shift the colors and the figures stop matching the surrounding text. The profile is dropped so the PNG is plain sRGB.",
+   "Stale figures: build_figures.py runs BEFORE the PDF rebuild in scripts/check_all.py. Otherwise GUIDE.pdf would embed last round's figures while the check still reported success -- changes present but not shipped, the hardest kind of staleness to notice.",
+   "Wrong figure path in a document: scripts/check_all.py step 6 now also scans Markdown image syntax and requires .tikz/.png/.pdf to all exist (verified by deliberately breaking a path: 3 missing products reported)."
+  ],
+  "verification": "scripts/verify_guide_pdf.py step 4 asserts the embedded figures are VECTOR Form XObjects rather than bitmaps, and that every figure referenced by GUIDE.md has its products present. tests/test_figures.py (32 checks) adds: opaque white background, no color profile, no content touching the frame edge, readable size, declared purpose, document-reference symmetry between the two READMEs, bidirectional manifest consistency, and a JSON duplicate-key guard.",
+  "reproducible": "PDF output is byte-stable (xelatex + SOURCE_DATE_EPOCH, same mechanism as GUIDE.pdf). PNGs are written only when pixels actually change -- sips rewrites metadata every run, so a timestamp-based check would leave a phantom diff on every `make check`.",
+  "purpose": {
+   "overview": "The whole story on one canvas, for readers who will only look at one figure: naive route (top row) vs this project (bottom row). The one visual claim is structural — this project adds a single subtraction that the naive route lacks — plus three key numbers. Deliberately carries NO sentences: text lives in the caption below it. First drafts packed the README prose into the canvas and produced a wall of small type, more tiring than just reading the prose. Guarded by test_figure_text_is_kept_out_of_the_canvas.",
+   "arch": "Overall architecture: camera -> feature map -> per-cell statistics -> residual -> trigger -> record, with the IMU copy as a side channel. Carries the mental model that §0.3 otherwise asks the reader to hold in prose.",
+   "mapping": "Electric-fish-to-camera correspondence, one row per role. Rows 2-3 are load-bearing: the copy (IMU) must be available BEFORE the self-interference arrives, which is what makes 'predict before detecting' implementable.",
+   "cost": "Cost account on a log axis. 0.032 ms (gyro copy) vs 4.456 ms (full optical-flow step) is a 139x gap that prose reports as '~26x' and readers cannot size. Log axis makes 'the copy is nearly free, per-frame flow is two orders of magnitude dearer' visible at a glance.",
+   "record_format": "Record format v2 byte layout: self-describing header, length-prefixed frame blocks (power-loss truncation still yields every complete frame), and the deliberate split between the lossless decision scalar and the lossy z-map.",
+   "two_layer": "The two-layer filter, which IS the product definition. Layer 1 (engine, motion dedup) is measured to work; layer 2 (semantic relevance) belongs to the caller and the engine deliberately does not answer it. Guards against reading the residual trigger as an importance filter, which four experiment rounds falsified.",
+   "bytes": "Record format v2 byte account on a LOG axis. f32 (75264 B/frame) to keep_only (3386 B) spans ~4 orders of magnitude; on a linear axis keep_only is 4.5% of f32 and collapses into a floor line, hiding that any difference remains at all. The three grey baselines in the figure carry the negative result: the gain comes from QUANTIZATION (int8 alone: 37632 -> 18835), not from entropy coding (f16+zlib ~= f16, because f16 mantissas are noise).",
+   "verdicts": "The 19 experiments from §0.4 rearranged by 'inside the domain' vs 'outside it'. The point is the SHAPE: the 12 failures cluster along one boundary rather than scattering, which is what makes 'boundary measurement' the right reading of them instead of 'most things failed'. Reordering is the whole content -- the same data in §0.4's numeric order does not show this.",
+   "gate": "Gate capture rate vs frame budget. The figure's job is to make an anti-intuitive negative result undeniable: at EVERY budget the residual gate (red) is shorter than random frame sampling (grey) -- and random sampling is a genuinely strong null here, because 5% of frames sprinkled into a 1s window already covers ~79% by the birthday problem. Purple dots are the storage-semantics onset capture, flat at 0.000 up to 5% budget: the residual does not carry event TIMING either. The green oracle line separates 'the rig cannot detect it' from 'this signal cannot detect it'.",
+   "zdist": "Cumulative per-cell z. Explains why deadband quantization is nearly lossless (70.2% of cells are under 1 sigma, so zeroing low-amplitude cells loses almost nothing, and zlib's gain comes precisely from those zeroed 'quiet cells'). Also carries the heavy tail: p99.9 = 9.49 sigma, which is why a threshold set for a normal distribution blocks 96.4% of updates (the 'gate freeze' failure in the same section).",
+   "resolution": "Resolution sweep: gyro's gain over naive grows monotonically with feature-map resolution (val -41.2% -> -52.2% -> -57.7%, unsaturated). This is the positive verification of the prediction in §2.3.3 ('the corollary discharge pays off only at finer resolution'). Plot RELATIVE reduction rather than absolute residual: the three resolutions have different feature-map scales, so absolute residuals are not comparable. The grey DIS bars show the gap to the quality ceiling NARROWING with resolution -- i.e. model error is being diluted, not gyro getting stronger.",
+   "flowlimit": "Optical-flow quality ceiling: DIS vs RAFT. Kills the natural objection 'your flow baseline is too weak, a SOTA estimator would show a gain' -- swapping in RAFT (~20x the cost) moves the residual by 0.7% (synthetic val) and 4.3% (real high-motion). So 'flow can only bring the residual down this far' is the ceiling of that route, not a weak estimator; the bottleneck is the model CLASS, not estimation accuracy. Two datasets whose absolute residuals differ 2x give the same conclusion, which is what makes it distribution-independent."
   },
-  {
-   "path": "runs/inspect_*.jpg",
-   "description": "Synthetic-rig frame inspections (event rendering checks)."
-  },
-  {
-   "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
-   "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
-  },
-  {
-   "path": "runs/debug_sync.png / runs/blend_*.png",
-   "description": "IMU-video sync and warp-vs-frame blend debug images."
-  }
- ],
+  "data_figure_note": "Data figures (bytes, verdicts) are generated by scripts/make_data_figures.py with PIL, NOT TikZ, and ship PNG only (no PDF). Rationale: their geometry must be COMPUTED from runs/*.json, and hardcoding computed coordinates into a .tikz source means every data change requires hand-editing coordinates, which will eventually be wrong (cost.tikz's log10 positions are hand-computed and easy to misread). PIL is already a dependency (demo_video.py); matplotlib is NOT, and pulling in a 30MB package to draw rectangles would break the zero-extra-dependency boundary. Consequence: build_guide_pdf.py includes them as width-scaled PNGs rather than vector PDFs, so they are raster in GUIDE.pdf -- acceptable for a bar chart at 1800px, and noted here so the asymmetry is a decision rather than an oversight."
+ },
  "logs": [
   {
    "path": "runs/capture.log",
@@ -558,5 +613,23 @@
    "pipeline therefore had to handle empty IMU explicitly; it chooses no compensation and documents that this is WEAKER than engine's no_imu='auto' (which estimates motion visually)."
   ],
   "verification": "288 tests pass; every silent path above has a regression test. No module in the project is now without test coverage."
- }
+ },
+ "figures": [
+  {
+   "path": "runs/aoe_peaks",
+   "description": "Top residual frames on the Open-AoE segment under winsorized stats: fast hand/object motion with motion blur — residual indexes motion transients, not action intervals."
+  },
+  {
+   "path": "runs/inspect_*.jpg",
+   "description": "Synthetic-rig frame inspections (event rendering checks)."
+  },
+  {
+   "path": "runs/scr*_*.jpg / runs/sync_check_*.png",
+   "description": "Screen-recording dead-end evidence: ProMotion/HEVC blending destroys frame-to-frame sharpness (see README Honest limitations)."
+  },
+  {
+   "path": "runs/debug_sync.png / runs/blend_*.png",
+   "description": "IMU-video sync and warp-vs-frame blend debug images."
+  }
+ ]
 }

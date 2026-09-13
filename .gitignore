@@ -19,6 +19,10 @@ guide.toc
 *.out
 *.toc
 
+# 图的中间产物：figs/*.tikz 是源，figs/*.pdf 与 figs/*.png 是**成品要入库**
+# （README 直接显示 PNG，GUIDE.pdf 直接嵌入 PDF），中间的 .tex/.aux/.log 不要。
+figs/.build/
+
 # 临时打包产物：内容与工作区重复，且无人引用。
 # 要分发给别人请用 `git archive`，不要提交快照 tar。
 cerebellum_cancel_tech.tar.gz

@@ -602,7 +602,10 @@ def read_record(path: str) -> Record:
         # 帧数据本身是完整的，退回按块扫描，别把整个录制判成损坏。
         return _open_truncated(path, fh, header, size, payload_off)
 
-    footer, arrays = _load_footer(fh, footer_off)
+    # **此处原有一次多余的 `_load_footer` 调用**（2026-09-13 删除）：
+    # try 块里已经解过一次，紧接着又解一次——页脚与整个 npz 侧车被解析
+    # 两遍，纯浪费（数十 MB 级记录上是实打实的开销），而且第二次不在
+    # try 内，若文件在两次之间被外部截断会抛未包装的异常。
     n = int(footer["n_frames"])
     rec = Record(
         path=path, header=header, n_frames=n,

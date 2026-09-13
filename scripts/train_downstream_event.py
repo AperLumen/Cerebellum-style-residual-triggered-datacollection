@@ -57,10 +57,17 @@ def main():
     ap.add_argument("dataset", default="data/aoe_event")
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
     ap.add_argument("--uniform-mults", default="0.5,1,2,4")
+    # 只取前 N 段——用于复现**历史子集**（如 2026-09-07 的 5 段版表）。
+    # 加这个旗标是为了让"老表中也补全量基线"可复现，而不是手工改代码
+    # 或让老表带着已知缺口留着。默认 0 = 全段。
+    ap.add_argument("--limit", type=int, default=0,
+                    help="use only the first N segments (0 = all)")
     args = ap.parse_args()
     mults = [float(m) for m in args.uniform_mults.split(",")]
 
     seqs = seq_dirs(args.dataset)
+    if args.limit:
+        seqs = seqs[:args.limit]
     print(f"leave-one-out x {len(args.seeds)} seeds over {len(seqs)} "
           f"event segments")
     print("cerebellum clips (cached) ...")
@@ -78,6 +85,10 @@ def main():
     specs = [("cerebellum", "cb", 1.0)]
     specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
     specs += [("oracle", "oracle", 1.0)]
+    # **全量基线**（2026-09-13 加，与 train_downstream.py / run_downstream_aoe_cv.py
+    # 一致）：判据是"筛选有没有价值"，那要求这张表有分辨力。若"存 100%"不比
+    # 最低预算好，表里的 1σ 重合就不能当证据。§2.3.6 漏了这行、结论因此被误读。
+    specs += [("all(100%)", "all", 1.0)]
 
     runs = {name: [] for name, _, _ in specs}
     stored = {name: [] for name, _, _ in specs}
@@ -90,6 +101,8 @@ def main():
                     n = min(len(feats[s]), len(labels[s]))
                     if kind == "cb":
                         mask = masks[s]
+                    elif kind == "all":
+                        mask = np.ones(n, dtype=bool)
                     elif kind == "oracle":
                         mask = oracle_frames(masks[s].mean(), labels[s][:n])
                     else:

@@ -56,6 +56,7 @@ import numpy as np
 from .acquisition import AcquisitionLayer
 from .contracts import (ConfigError, InsufficientDataError, NonFiniteError,
                         ShapeError, check_min_frames, check_positive)
+from .featmap_cancel import CancelConfig
 
 # 一段录制至少要这么多帧才值得跑。低于此值的结论没有统计意义——
 # 与 integrity.MIN_ANALYSIS_FRAMES 同一纪律：宁可拒绝出结论，不可给出
@@ -130,6 +131,30 @@ class CMCIResult:
                 raise ShapeError(
                     f"{name}: 长度 {len(a)} != 帧数 {n}。"
                     "本格式的唯一硬契约是 axis 0 = 帧索引，长度必须一致。")
+        # **时间轴必须有限**（2026-09-13 补）。此前只查长度，于是 NaN 时间戳
+        # 能进产物：实测 t[-1]=NaN 时 ``duration`` 仍返回 4.0（因为差值里
+        # 的 NaN 被后来的有限值掩盖），``stored_seconds`` 与记录格式里的
+        # ``t`` 却带着 NaN 落盘。逐帧对齐契约的另一半正是"同一时间轴"，
+        # 长度对而时间是 NaN，下游按时间对齐就错了。
+        # 注意 ``dataset.build_section`` 早已查这一条——引擎入口此前漏了，
+        # 于是同一个非法输入在两条路径上一个拒绝、一个静默接受。
+        t_arr = np.asarray(self.t, dtype=np.float64)
+        if not np.all(np.isfinite(t_arr)):
+            n_bad = int(np.count_nonzero(~np.isfinite(t_arr)))
+            raise NonFiniteError(
+                f"t: 时间轴含 {n_bad}/{t_arr.size} 个 NaN/Inf。"
+                "逐帧对齐契约要求所有载荷共享同一时间轴；"
+                "时间戳非有限会让下游的按时间对齐静默出错。")
+        # keep 是 0/1 决策标记：静默接受 keep=200 会让 keep_fraction=200.0，
+        # 在预算类统计里当"200% 保留"用，看不出是坏值。
+        k = np.asarray(self.keep)
+        if k.size and not np.all((k == 0) | (k == 1)):
+            bad = int(np.count_nonzero((k != 0) & (k != 1)))
+            raise ShapeError(
+                f"keep: 必须是 0/1 决策标记，实得 {bad} 个非 0/1 值"
+                f"（如 {k[(k != 0) & (k != 1)][:3].tolist()}）。"
+                "keep_fraction 直接把均值当比例用，非 0/1 会给出 >100% 的"
+                "读数却没有任何报错。")
 
     @property
     def n_frames(self) -> int:
@@ -188,18 +213,36 @@ class CMCIResult:
 
 
 def _merge(segs: list[Segment]) -> list[Segment]:
-    """合并重叠/相邻片段，避免时长重复计数。"""
+    """合并重叠/相邻片段，避免时长重复计数。
+
+    **不修改入参**（2026-09-13 修复）：原实现 ``out = [segs[0]]`` 后直接
+    ``out[-1].end = ...``，于是 ``_merge`` 会**原地改写调用方的 Segment 对象**
+    ——实测传入两个重叠片段后，第一个片段的 end 从 1.0 变成 2.0、
+    n_frames 从 10 变成 20，而该对象仍留在 ``res.segments`` 里。
+    ``stored_seconds`` 与 ``summary()`` 都调 ``_merge``，于是这个副作用会在
+    每次读属性时累积（此处数值恰好稳定，但依赖它稳定是不安全的），
+    并且导出器（HTML/JSONL）看到的是被改写过的片段。
+
+    这里改成先浅拷贝再合并，使 ``_merge`` 成为纯函数。
+    """
     if not segs:
         return []
-    out = [segs[0]]
+    out = [_copy_segment(segs[0])]
     for s in segs[1:]:
         if s.start <= out[-1].end:
             out[-1].end = max(out[-1].end, s.end)
             out[-1].n_frames += s.n_frames
             out[-1].peak_score = max(out[-1].peak_score, s.peak_score)
         else:
-            out.append(s)
+            out.append(_copy_segment(s))
     return out
+
+
+def _copy_segment(s: Segment) -> Segment:
+    """浅拷贝一个 Segment（字段全是标量，浅拷贝即完全隔离）。"""
+    return Segment(start=s.start, end=s.end, n_frames=s.n_frames,
+                   mean_score=s.mean_score, peak_score=s.peak_score,
+                   selection_reason=s.selection_reason)
 
 
 # ------------------------------------------------------------------ 引擎
@@ -285,7 +328,28 @@ def run(video_path: str, imu_path: str | None = None, *,
         imu_offset=cfg.imu_offset, mirror=cfg.mirror,
         no_imu=cfg.no_imu, visual_motion=cfg.visual_motion)
 
-    layer = AcquisitionLayer(frontend=cfg.frontend)
+    # **必须把源的 fps 传进 CancelConfig**（2026-09-13 修复的真实 bug）。
+    # ``CancelConfig.fps`` 默认写死 30.0，而 warp 的帧间隔取的是
+    # ``1.0 / cfg.fps``。此前 engine 只把 fps 用于**时间轴**（`_FileSource`
+    # 累加 ``stream.frame_dt``），没往取消层传，于是 60 fps 的视频会出现
+    # "时间轴按 1/60 走、预测位移按 1/30 算"——预测位移是实际的两倍，
+    # 残差被人为放大，且产物 meta 里明明白白写着 fps=60（自相矛盾）。
+    # 这是典型的静默失效：不报错，只让读数偏向"什么都不补偿更好"。
+    src_fps = src.meta.get("fps") or cfg.fps or 30.0
+    check_positive(src_fps, "fps")
+    # **视觉降级路径必须用 rotation 预测**（2026-09-13 修复）。
+    # ``VisualMotionEstimator.gyro_equivalent`` **只填 roll**（out[2]）——
+    # pitch/yaw 从仿射里估不出来（见该函数 docstring，这是刻意的诚实设计）。
+    # 而默认的 ``pred="shift"`` 只用 gyro[0]/gyro[1]（pitch/yaw），roll 被丢弃。
+    # 两者叠加的后果是：**整条视觉降级路径在默认配置下对计算零影响**——
+    # 仍然付 0.96 ms/帧去做特征匹配（比 IMU 贵 29 倍），算出 roll，
+    # 然后交给一个不看 roll 的函数，而 meta 里写着
+    # "self-motion estimated VISUALLY (degraded path)"。
+    # 这是"静默失败"里最难发现的一类：不报错、产物自述正确、数字看起来
+    # 也合理（因为它等于没做降级）。rotation 模式会用 roll，才使估计生效。
+    pred = "rotation" if src.meta.get("motion_source") == "visual" else "shift"
+    cancel_cfg = CancelConfig(fps=float(src_fps), pred=pred)
+    layer = AcquisitionLayer(frontend=cfg.frontend, cancel_cfg=cancel_cfg)
 
     ts, gyros, scores, surprises, keeps, zs = [], [], [], [], [], []
     for i, (frame, gyro, t) in enumerate(src.frames()):

@@ -1,0 +1,54 @@
+% 图 3：两层过滤——产品定义的核心，也是诚实性要求的落点。
+%
+% 这张图要防的是一个具体误解：把"残差触发"读成"重要性筛选器"。残差触发器只能
+% 回答"哪里动了"，回答不了"什么重要"（后者已被 §2.3.6–2.3.8 四轮实验否证）。
+% 所以引擎把过滤**明确拆成两层**，且第 2 层不由引擎负责。
+%
+% 画幅由 scripts/build_figures.py 实测，不在这里声明。
+\begin{tikzpicture}[node distance=6mm]
+
+  % ---------------- 输入 ----------------
+  \node[box=cCam] (in) {连续帧\\{\figsub{相机 30\,fps 常开}}};
+
+  % ---------------- 第 1 层：引擎 ----------------
+  \node[box=cPred, right=10mm of in] (l1)
+    {第 1 层：运动去重\\{\figsub{剪掉自运动可解释的帧}}};
+  \node[note, below=1.5mm of l1]
+    {引擎负责\\{\figsub{0.033\,ms/帧 \textbf{✅ 实测成立}}}};
+
+  % ---------------- 中间态 ----------------
+  \node[box=cRes, right=10mm of l1] (mid)
+    {候选片段\\{\figsub{+ 逐帧 score/surprise}}};
+
+  % ---------------- 第 2 层：调用方 ----------------
+  \node[box=cStore, right=10mm of mid] (l2)
+    {第 2 层：业务规则\\{\figsub{rule= 注入，只读视图}}};
+  \node[note, below=1.5mm of l2]
+    {调用方负责\\{\figsub{取决于任务 \textbf{⬜ 引擎不代答}}}};
+
+  \draw[flow] (in)  -- (l1);
+  \draw[flow] (l1)  -- (mid);
+  \draw[flow] (mid) -- (l2);
+
+  % ---------------- 输出 ----------------
+  \node[box=cStore, right=10mm of l2] (out)
+    {交付片段\\{\figsub{+ \texttt{selection\_reason}}}};
+  \draw[flow] (l2) -- (out);
+
+  % ---------------- 核心诚实性：标注来源 ----------------
+  \begin{scope}[on background layer]
+    \node[groupbox, fit=(l1)(mid)] (g1) {};
+  \end{scope}
+
+  \node[note, below=16mm of mid] (reason)
+    {\texttt{selection\_reason} 如实标明每一段的来源：\\
+     \texttt{"motion\_dedup"}（第 1 层选中）\quad|\quad
+     \texttt{"rule:<name>"}（第 2 层选中）};
+  \draw[dropflow] (out.south) -- ++(0,-8mm) -| (reason.east);
+
+  % ---------------- 边界声明 ----------------
+  \node[note, below=4mm of reason, text width=15cm]
+    {第 1 层只回答\textbf{"哪里动了"}，不回答\textbf{"什么重要"}——
+     把前者当后者卖，就是把已证伪的负结果包装成产品能力。};
+
+\end{tikzpicture}

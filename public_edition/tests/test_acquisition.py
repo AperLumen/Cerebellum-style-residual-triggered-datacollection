@@ -82,7 +82,15 @@ def test_persistent_residual_triggers_and_boundaries():
     assert any(keeps)
     assert len(clips) == 1
     start, end = clips[0]
-    assert 30 * DT <= start <= 36 * DT       # onset 在事件开始后几帧内
+    # onset 因 z-EMA 平滑与强尖峰判据落在事件后 1~2 帧（t=1.0667，帧 32），
+    # 再被 pre_roll 前移 0.3s。所以起点不允许晚于 onset 上界，
+    # 也不允许晚到 onset 减 pre_roll 之外——即 pre_roll 确实生效了。
+    pre = layer.trigger.cfg.pre_roll
+    assert start >= 0.0
+    assert start <= 36 * DT, f"onset 太晚: {start}"
+    assert start <= 32 * DT - pre + 1e-6, (
+        f"pre_roll 未生效: start={start:.4f}, "
+        f"期望 <= {32 * DT - pre:.4f}")
     assert np.isclose(end, 39 * DT)          # 开放片段闭到末帧
 
 

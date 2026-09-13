@@ -88,6 +88,7 @@ def main():
     specs = [("cerebellum", "cb", 1.0)]
     specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
     specs += [("oracle", "oracle", 1.0)]
+    specs += [("all(100%)", "all", 1.0)]
 
     runs = {name: [] for name, _, _ in specs}
     stored = {name: [] for name, _, _ in specs}
@@ -104,6 +105,8 @@ def main():
                     n = min(len(feats[s]), len(labels[s]))
                     if kind == "cb":
                         mask = masks[s]
+                    elif kind == "all":
+                        mask = np.ones(n, dtype=bool)
                     elif kind == "oracle":
                         mask = oracle_frames(masks[s].mean(), labels[s][:n].sum(1))
                     else:

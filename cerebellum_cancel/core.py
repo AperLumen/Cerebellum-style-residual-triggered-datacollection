@@ -313,6 +313,17 @@ class SurpriseTrigger:
             assert self.start_t is not None
             self.clips.append((self.start_t, t_end))
             self.on = False
+        # **pre_roll 此前从未被使用**（2026-09-13 修复）：``TriggerConfig``
+        # 把它声明为"onset 之前保存的秒数"，``README``/``GUIDE`` 也照此描述，
+        # 但代码里没有任何地方读它——实测 onset=5.000s、pre_roll=0.5 时
+        # clip 起点是 5.033（= onset 帧的时间戳），前缀一帧都没留。
+        # 事件的前兆（物体开始进入视野的那几帧）正是最该留的部分，丢掉它是
+        # 静默的：片段看起来"正常"，只是短了。
+        # 这里在**合并之前**统一回退起点并夹到 0，保证:
+        #   ① 每个 clip 都得到前缀；② 合并逻辑仍按真实区间判断间隔。
+        if self.cfg.pre_roll > 0:
+            pre = float(self.cfg.pre_roll)
+            self.clips = [(max(0.0, a - pre), b) for a, b in self.clips]
         # merge clips separated by less than min_clip_len
         merged = []
         for c in self.clips:

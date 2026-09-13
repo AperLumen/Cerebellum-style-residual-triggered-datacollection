@@ -1,0 +1,59 @@
+% ---------------------------------------------------------------------------
+% 图件的共享样式。由 scripts/build_figures.py 在每张图的包装文档里 \input，
+% 不单独编译（本文件只有 preamble 内容，没有 \begin{document}）。
+%
+% 样式集中在这里，是为了让所有图共用一套视觉语言：
+%   颜色 = 语义（蓝 = 相机/前端，青 = IMU 副本，橙 = 预测，红 = 残差，紫 = 存储）
+% 读者看第二张图时不需要重新学配色。
+% ---------------------------------------------------------------------------
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds, calc}
+\usepackage{xcolor}
+
+% 语义色。**含义固定，不要按美观换色**：同一颜色在所有图里指同一类东西。
+\colorlet{cCam}{blue!55!black}
+\colorlet{cImu}{teal!65!black}
+\colorlet{cPred}{orange!80!black}
+\colorlet{cRes}{red!70!black}
+\colorlet{cStore}{violet!70!black}
+
+% 页面紧贴内容：无页码、无缩进、首行不留 \topskip 的竖向空隙
+% （\topskip=0 让图的顶边正好落在版心顶边，构建脚本据此量出紧致画幅）
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\topskip}{0pt}
+\setlength{\parskip}{0pt}
+\setlength{\emergencystretch}{2em}
+
+% 副标题统一走这个命令，保证各图字号一致（不要在图里写裸 \scriptsize）
+\newcommand{\figsub}[1]{{\scriptsize #1}}
+
+\tikzset{
+  % 主流程方框。用法：[box=cCam]
+  box/.style={draw=#1!70!black, fill=#1!8, rounded corners=2.5pt,
+              line width=0.6pt, align=center, inner xsep=5pt, inner ysep=3.5pt,
+              font=\footnotesize, text=black!88},
+  % 箭头三态：主链路实线、副通道虚线（IMU 是旁路）、丢弃点线
+  flow/.style={-{Stealth[length=4.5pt,width=3.5pt]}, draw=black!70, line width=0.7pt},
+  sideflow/.style={-{Stealth[length=4.5pt,width=3.5pt]}, draw=cImu,
+                   line width=0.8pt, dashed},
+  dropflow/.style={-{Stealth[length=3.5pt,width=3pt]}, draw=black!45,
+                   line width=0.6pt, densely dotted},
+  % 箭头上的小标注
+  tag/.style={font=\scriptsize, inner sep=1.5pt, text=black!75},
+  % 框外的说明文字
+  note/.style={font=\scriptsize, text=black!60, align=center},
+  % 把一段流程框起来，标出"核心机制"所在
+  groupbox/.style={draw=black!18, fill=black!3, rounded corners=4pt, inner sep=5pt},
+  grouplab/.style={font=\scriptsize\bfseries, text=black!55},
+  % 映射图的两列：左列是论文里的角色，右列是本项目的对应物。
+  % 用 anchor=north west 统一按"左上角"对齐，行与行才对得齐。
+  lb/.style={draw=cImu!55!black, fill=cImu!6, rounded corners=2.5pt,
+             line width=0.5pt, anchor=north west, text width=6.6cm,
+             align=left, inner sep=4pt, font=\footnotesize, text=black!88},
+  rb/.style={draw=cCam!55!black, fill=cCam!6, rounded corners=2.5pt,
+             line width=0.5pt, anchor=north west, text width=10.2cm,
+             align=left, inner sep=4pt, font=\footnotesize, text=black!88},
+  colhdr/.style={font=\small\bfseries, text=black!70, anchor=north west},
+  mapflow/.style={-{Stealth[length=4pt,width=3pt]}, draw=black!45, line width=0.6pt},
+}

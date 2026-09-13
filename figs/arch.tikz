@@ -1,0 +1,36 @@
+% 图 1：总架构。主链路自左向右六段；IMU 是喂给统计层的"副本"副通道（虚线）；
+% 未触发的帧不进记录格式——这是整个项目的立论在数据通路上的样子。
+%
+% 画幅由 scripts/build_figures.py **实测**（不用手写声明，避免猜错尺寸静默裁图）。
+\begin{tikzpicture}[node distance=5.5mm]
+
+  % ---------------- 主链路 ----------------
+  \node[box=cCam]                 (cam)  {相机\\{\figsub{常开 30\,fps}}};
+  \node[box=cCam, right=of cam]   (feat) {特征图\\{\figsub{backbone 0.83\,ms}}};
+  \node[box=cPred, right=of feat] (stat) {逐格运行统计\\{\figsub{负像 $\mu,\ \sigma^{2}$}}};
+  \node[box=cRes, right=of stat]  (res)  {残差 $z$\\{\figsub{$\mathrm{surprise}=\max|z|$}}};
+  \node[box=cStore, right=of res] (trig) {触发器\\{\figsub{两层过滤}}};
+  \node[box=cStore, right=of trig](rec)  {记录 v2\\{\figsub{\texttt{.cmcir}}}};
+
+  \draw[flow] (cam)  -- (feat);
+  \draw[flow] (feat) -- (stat);
+  \draw[flow] (stat) -- (res);
+  \draw[flow] (res)  -- (trig);
+  \draw[flow] (trig) -- node[tag, above]{\texttt{keep}} (rec);
+
+  % ---------------- 核心机制：把"预测与取消"这一段框出来 ----------------
+  \begin{scope}[on background layer]
+    \node[groupbox, fit=(stat)(res)] (grp) {};
+  \end{scope}
+  \node[grouplab, above=1.2mm of grp] {预测与取消：在线、零训练、零标注};
+
+  % ---------------- IMU 副通道（虚线 = 旁路，不是主链路） ----------------
+  \node[box=cImu, below=10mm of stat] (imu) {IMU 陀螺流\\{\figsub{0.032\,ms/帧}}};
+  \draw[sideflow] (imu.north) -- node[tag, right]{副本} (stat.south);
+  \node[note, below=1.5mm of imu] {出厂自带，零额外硬件};
+
+  % ---------------- 丢弃分支 ----------------
+  \node[note, below=11mm of trig] (drop) {丢弃 $\approx$97\%};
+  \draw[dropflow] (trig.south) -- (drop.north);
+
+\end{tikzpicture}

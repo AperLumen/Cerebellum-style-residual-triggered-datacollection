@@ -27,6 +27,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PDF = os.path.join(ROOT, "GUIDE.pdf")
 MD = os.path.join(ROOT, "GUIDE.md")
 
+# GUIDE.md 里引用的图必须真的嵌进了 PDF。判据是**矢量性**而不只是"有张图"：
+# 若有人把 \includegraphics 指向 .png（而不是 build_figures.py 产出的 .pdf），
+# PDF 里会出现位图 XObject——放大就糊，而且没人会注意到，直到需要打印。
+FIG_RE = re.compile(r"!\[[^\]]*\]\((figs/[A-Za-z0-9_-]+)\.png\)")
+
 # 必须出现在 PDF 里的锚点。**全部取自 GUIDE.md 实际存在的文本**——
 # 加锚点前先确认源文档里有它（本脚本会做这个核对）。
 ANCHORS = [
@@ -195,6 +200,60 @@ def main() -> int:
         ok = False
     if not bad_anchor and not missing:
         print(f"    ✓ 全部 {len(ANCHORS)} 条命中")
+    print()
+
+    # --- 4. 图
+    # 三层检查，因为"图在文档里"和"图在 PDF 里"是两件事，而"是一张图"和
+    # "是一张矢量图"又是两件事：
+    #   ① GUIDE.md 引用的每张图，其产物都要存在；
+    #   ② 结构图（有 .tikz 源）在 PDF 里必须是**矢量 Form XObject**；
+    #   ③ 数据图（PIL 生成，无 .tikz）本来就是位图——这不是退步，是决策
+    #      （见 scripts/make_data_figures.py），所以单独计数、不参与②的判据。
+    refs = sorted(set(FIG_RE.findall(open(MD, encoding="utf-8").read()))
+                  if os.path.exists(MD) else [])
+    vec_refs = [s for s in refs
+                if os.path.exists(os.path.join(ROOT, s + ".tikz"))]
+    raster_refs = [s for s in refs if s not in vec_refs]
+
+    fig_missing = []
+    for stem in refs:
+        if not os.path.exists(os.path.join(ROOT, stem + ".png")):
+            fig_missing.append(stem + ".png")
+        elif stem in vec_refs and not os.path.exists(
+                os.path.join(ROOT, stem + ".pdf")):
+            fig_missing.append(stem + ".pdf")
+
+    form_xo = image_xo = 0
+    for p in r.pages:
+        res = p.get("/Resources")
+        xo = res.get("/XObject") if res else None
+        if not xo:
+            continue
+        for _, v in xo.items():
+            o = v.get_object()
+            sub = o.get("/Subtype")
+            if sub == "/Form":
+                form_xo += 1
+            elif sub == "/Image":
+                image_xo += 1
+
+    print(f"[4] 图: GUIDE.md 引用 {len(refs)} 张"
+          f"（结构图 {len(vec_refs)} + 数据图 {len(raster_refs)}）, "
+          f"PDF 内矢量 Form {form_xo}, 位图 Image {image_xo}")
+    if fig_missing:
+        print(f"    ✗ 引用的图缺少产物（先跑 "
+              f"scripts/build_figures.py / make_data_figures.py）: "
+              f"{fig_missing}")
+        ok = False
+    # 判据用**结构图的数量**：数据图允许是位图，但结构图退化就说明 \includegraphics
+    # 被指向了 .png，放大即糊且没人会注意到（直到需要打印）。
+    if vec_refs and form_xo < len(vec_refs):
+        print(f"    ✗ PDF 里的矢量图少于结构图数（{form_xo} < {len(vec_refs)}）——"
+              f"可能有图没嵌进去，或被换成了位图")
+        ok = False
+    if not fig_missing and form_xo >= len(vec_refs):
+        print(f"    ✓ {len(vec_refs)} 张结构图以矢量嵌入，"
+              f"{len(raster_refs)} 张数据图为位图（符合设计）")
     print()
 
     print("结论:", "✓ 通过" if ok else "✗ 有问题")

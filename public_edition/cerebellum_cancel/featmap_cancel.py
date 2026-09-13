@@ -215,7 +215,7 @@ class FeatureMapCancel:
         sd = np.sqrt(self.var) + 1e-3
         z = err / sd
         b = self.cfg.border
-        surprise = float(np.abs(z[:, b:-b, b:-b]).max())
+        surprise = float(np.abs(_interior(z, b, "FeatureMapCancel")).max())
 
         self.n += 1
         lr = self.cfg.std_ema
@@ -260,14 +260,40 @@ def rollout(canc: FeatureMapCancel, fmaps: np.ndarray,
     return z, sur
 
 
+def _interior(z: np.ndarray, border: int, what: str) -> np.ndarray:
+    """取去掉边界的内部区域（在**最后两维**上切），并显式拒绝空区域。
+
+    ``z[..., b:-b, b:-b]`` 在 ``b >= 该轴长度/2`` 时会切出**空数组**，随后
+    ``.max()`` 抛的是 numpy 原生的
+    ``ValueError: zero-size array to reduction operation maximum which has
+    no identity``——调用方看到的是一个与"border 配错了"毫无关联的报错。
+    实测 ``border=0`` 在最低维为 2 的网格上就已经触发（切片退化为空）。
+
+    支持任意前导维（逐帧 (T,C,H,W) 与单帧 (C,H,W) 都要能过）。
+    """
+    b = int(border)
+    if z.ndim < 2:
+        raise ValueError(
+            f"{what}: 期望至少 2 维 (...,H,W)，实得 shape={z.shape}")
+    h, w = z.shape[-2], z.shape[-1]
+    if b < 0:
+        raise ValueError(f"{what}: border 不能为负，实得 {b}")
+    if h - 2 * b <= 0 or w - 2 * b <= 0:
+        raise ValueError(
+            f"{what}: border={b} 过大，网格 {h}x{w} 去掉边界后为空"
+            f"（需 border < {min(h, w) / 2:g}）。"
+            "空区域无法取峰值——此前抛的是 numpy 的 zero-size 原生错误。")
+    return z[..., b:h - b, b:w - b]
+
+
 def energy_score(z: np.ndarray, border: int = 2) -> np.ndarray:
     """Untrained readout: pooled squared-z over interior cells, per frame."""
-    zi = z[:, :, border:-border, border:-border]
-    return (zi ** 2).sum(axis=(1, 2, 3))
+    zi = _interior(z, border, "energy_score")
+    return (zi ** 2).sum(axis=(-3, -2, -1))
 
 
 def maxcell_score(z: np.ndarray, border: int = 2) -> np.ndarray:
     """Untrained readout: strongest single interior cell (channel-summed z^2)."""
-    s = (z ** 2).sum(axis=1)                    # (T, H, W)
-    s = s[:, border:-border, border:-border]
+    s = (z ** 2).sum(axis=-3)                   # (T, H, W)
+    s = _interior(s, border, "maxcell_score")
     return s.reshape(len(s), -1).max(axis=1)

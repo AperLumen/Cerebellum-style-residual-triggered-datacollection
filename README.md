@@ -8,6 +8,67 @@ can predict**. The pipeline learns a "negative image" of the sensory
 consequences of the rig's own motion (corollary discharge = IMU) and only
 records the residual — the unexpected.
 
+![Overall architecture — a camera + IMU acquisition layer.](figs/arch.png)
+
+## The 3-minute version (read this if you are short on time)
+
+![Project overview: the naive route vs this project, with three key readings](figs/overview.png)
+
+**How to read it.** The top row is the **naive route**: treat "the picture
+changed" as "something happened", so the rig's own walking, turning and hand
+shake all count — the signal drowns in self-motion, and everything gets stored
+(grey = that route does not work). The bottom row is **this project**: one extra
+subtraction. Use the IMU gyro to learn per cell "how much change self-motion
+usually causes", **subtract it**, and what remains — the residual — is the change
+you cannot explain yourself. Only that gets stored (~3%).
+
+**Why that subtraction is worth it.** Detecting "what matters" is hard (it needs
+on-device semantic understanding); predicting **"which changes I caused myself"
+is easy** — because the rig ships with its own motion sensor. So this runs with
+**zero training, zero labels, ~0.2 ms/frame**, using an IMU consumer devices
+already have. The structure is borrowed from neuroscience (corollary-discharge
+cancellation in electric fish), but the advantage is purely engineering.
+
+**Where the three numbers come from (and their scope).**
+- **3%**: the acquisition layer costs ~1.0 ms/frame end to end (the IMU copy
+  itself is only 0.032 ms) = 3% of a 30 fps budget. "Store only 3%" is the
+  synthetic-rig reading; on the real desktop data the median is 9.2%.
+- **0.298**: downstream val AP on the synthetic benchmark, beating uniform
+  sampling at the same budget (uniform 4× budget = 51% storage, AP 0.145) and
+  oracle (AP 0.191). **On real video this is not yet testable** — the
+  verb-classification task scores the same at 8% and 100% storage (§2.3.6,
+  corrected 2026-09-13), so it cannot rank selection quality. What *is*
+  confirmed on real video is that the mechanism works and the filter selects
+  as intended (§2.3.11).
+- **0.876×**: on real-IMU segments the residual drops to 0.876× of baseline
+  (the earlier tan-approximation translation was 1.308×, i.e. actively harmful).
+  Absolute residuals are no longer bit-reproducible — **quote the ratio**, not
+  the decimals.
+
+**The half this figure does not draw, and it matters just as much.** The
+residual **is not** semantic importance. Four independent experiment rounds
+(downstream training value / inference-time gating / 24 target-signal
+combinations / a labelled upper bound) approached from different directions and
+**the boundary landed in the same place**: the residual answers "which pixel
+motions can I not explain by self-motion" (**camera side**), while "what matters"
+is a **world-side** semantic question. Using a camera-side motion quantity to
+carry a world-side semantic label is a **category error** — negative by
+construction, not because the estimator is weak, but because the question is
+outside its domain.
+
+> ⚠️ **Every ❌ in this document is a domain measurement, not a failure of the
+> method.** Read the opening of [GUIDE.md §0.5](GUIDE.md) first, or those ❌
+> will be misread as "it didn't work".
+
+**What actually ships is two things.** ① An estimator whose **domain is measured
+precisely** (applicable to motion dedup / bandwidth pre-screening, at two orders
+of magnitude lower cost); ② a whole engineering delivery layer that **depends on
+no single research claim** — a power-loss-safe record format, a trainable
+multimodal dataset container, input-contract hardening, and an acquisition
+integrity sentinel. The second is what you can use today.
+
+---
+
 ## How to read the claims here (first, and it matters)
 
 This README contains many sentences like "the residual does not carry event
@@ -58,6 +119,8 @@ change this, and has it been tried?". See GUIDE.md §2.0 for the details.
 | Output cell residual | Per-cell z-scored residual; max over interior cells = surprise |
 | Prey detection | Triggered clip saving (with hysteresis) |
 
+![Mapping from the electric fish ELL to this prototype.](figs/mapping.png)
+
 ## Current demo results (synthetic 60 s rig, 6 surprise events)
 
 ```
@@ -76,11 +139,15 @@ cerebellum pipeline (the earliest one, while statistics are still converging)
 
 ## Quick start
 
+**In one sentence**: a camera + IMU acquisition layer — the gyro predicts "how
+much *I* moved", that part is subtracted, and only what cannot be subtracted is
+stored. Zero training, zero labels, ~0.2 ms/frame.
+
 For the full project guide — method, cost accounting, every experiment including
 the negative results, and the forward-looking deliverables — see
-[`GUIDE.md`](GUIDE.md), also available as a hyperlinked PDF with a bookmark
-outline: [`GUIDE.pdf`](GUIDE.pdf). This README is the executive summary; the
-guide is the self-contained reference.
+[`GUIDE.md`](GUIDE.md) (**it opens with a five-minute walkthrough**), also
+available as a hyperlinked PDF with a bookmark outline: [`GUIDE.pdf`](GUIDE.pdf).
+This README is the executive summary; the guide is the self-contained reference.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -95,7 +162,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/
 ```
 
 Run everything (tests + type check + doc-reference audit + manifest audit +
-guide PDF rebuild/verify) through one entry point:
+figure rebuild + guide PDF rebuild/verify) through one entry point:
 
 ```bash
 make check          # fast-fail; use this before committing
@@ -103,6 +170,20 @@ make check-all      # run every step, then summarise
 # equivalent without make:
 PYTHONPATH=. .venv/bin/python scripts/check_all.py
 ```
+
+Figures are TikZ (`figs/*.tikz`) built into **both** a vector PDF (embedded in
+`GUIDE.pdf`) and a PNG (shown here on GitHub) by one command:
+
+```bash
+.venv/bin/python scripts/build_figures.py   # figs/*.tikz → figs/*.pdf + figs/*.png
+```
+
+The frame size is **measured**, not declared: the script typesets each figure
+on A4 once, reads the true box dimensions, then re-typesets on exactly that
+paper size. Hand-declaring a size means guessing, and guessing too small
+silently crops the figure. `make check` runs this before rebuilding the PDF,
+and `scripts/verify_guide_pdf.py` asserts the embedded figures are **vector**
+(Form XObjects) rather than bitmaps.
 
 This gate is deliberately strict about two things: the pre-existing 6 errors in
 `tests/test_extract_featmaps_dino.py` are recorded as an **expected baseline**
@@ -780,16 +861,29 @@ robust trigger (`scripts/run_downstream_aoe_cv.py`,
 
 ```
 method          stored  val mAP        ivRec@10%
-cerebellum       0.160  0.162±0.077    0.67±0.12
-uniform(0.5x)    0.081  0.177±0.089    0.72±0.08
-uniform(1x)      0.161  0.173±0.082    0.68±0.07
+cerebellum       0.160  0.161±0.078    0.67±0.12
+uniform(0.5x)    0.081  0.176±0.089    0.72±0.08
+uniform(1x)      0.161  0.173±0.081    0.68±0.07
 uniform(2x)      0.240  0.174±0.089    0.71±0.06
-uniform(4x)      0.400  0.167±0.084    0.71±0.09
-oracle           0.132  0.164±0.088    0.72±0.09
+uniform(4x)      0.400  0.169±0.082    0.71±0.09
+oracle           0.132  0.164±0.089    0.72±0.09
+all(100%)        1.000  0.166±0.083    0.71±0.08
 ```
 
-The earlier 0.197 was single-split sampling noise: every method's mAP
-coincides within 1σ. "Does not transfer" now has statistical support.
+The earlier 0.197 was single-split sampling noise. **But the last row
+retracts the original reading of this table**: storing 100% of frames
+scores the same as storing 8% — **12× more data buys nothing**, so this
+task cannot measure selection quality at all. The 1σ overlap is evidence
+about a broken yardstick, not about the trigger. (§2.3.6, corrected
+2026-09-13; the oracle here was also degenerate — 48–100% of frames carry
+a verb label, so "pick by ground truth" collapsed into "pick at random".)
+
+**What *is* supported on real video** (§2.3.11): the compensation
+mechanism works (shuffling or sign-flipping the gyro turns a +0.045 gain
+into −0.063/−0.065 — 10/11 segments become 1/11) and the filter selects as
+intended (84% of frames dropped, downstream still finds actions in 67% of
+intervals). Residuals give you *physically surprising* frames, not
+*semantically important* ones.
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/run_downstream_aoe_cv.py data/aoe

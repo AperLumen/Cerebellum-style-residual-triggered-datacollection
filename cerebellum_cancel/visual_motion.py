@@ -228,6 +228,17 @@ class VisualMotionEstimator:
         推导：相似变换的旋转分量 `theta = atan2(M[1,0], M[0,0])` 即本帧转角。
         平移在此**不**折算成角速度——平移不是旋转，硬折算会引入 GUIDE §2.3.5
         实测过的"常深度平移模型"错误。所以只回填旋转，平移留给未来的专职项。
+
+        **``f_map`` 目前不参与计算**（只保留签名兼容）：本函数输出的 roll 是
+        纯角度量（deg/s），与焦距无关——把像素平移折算成角度才需要 ``f_map``，
+        而那正是上面刻意不做的事。**不要**为了让参数"看起来有用"而把它
+        塞进计算。
+
+        **调用方注意**：返回值**只填 roll**（``out[2]``），pitch/yaw 恒为 0。
+        因此只有当上层用**含 roll 的预测**（``CancelConfig.pred="rotation"``）
+        时，这个估计才真正影响计算；在 ``pred="shift"``（默认）下 roll 被丢弃，
+        整条视觉降级路径**对结果零影响**。``engine.run`` 已按 motion_source
+        自动选择 ``pred="rotation"``（2026-09-13 修复），自定义调用方需自行保证。
         """
         est = self.estimate(prev_gray, gray)
         out = np.zeros(3, dtype=np.float64)

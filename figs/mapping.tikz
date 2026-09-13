@@ -1,0 +1,49 @@
+% 图 2：电鱼 → 相机 的逐项映射。左列是 Perks et al. (2026) 电路里的角色，
+% 右列是它在本项目里的工程对应物。
+%
+% 第 2、3 行是整套方法的关键：副本（IMU）必须在"自干扰到达之前"就可用，
+% 负像才能在被淹没前把它减掉——这就是"预测先于检测"的工程含义。
+%
+% 行距 1.6cm 是给两行盒子留的余量（盒子高约 1.1cm）；压到 1.2cm 以内容易叠字。
+% 画幅由 scripts/build_figures.py 实测，不在这里声明。
+\begin{tikzpicture}
+
+  \node[colhdr] at (0, 0.30)  {非洲弱电鱼 ELL（Perks et al. 2026）};
+  \node[colhdr] at (7.4, 0.30){本项目：相机 + IMU 采集层};
+
+  % ---- 第 1 行：最大的自干扰
+  \node[lb] (l1) at (0, 0)
+    {{\bfseries 电器官放电 EOD}\\{\figsub{自己最强的输入，淹没猎物信号}}};
+  \node[rb] (r1) at (7.4, 0)
+    {{\bfseries 自运动引起的视流}\\{\figsub{画面里最大最频繁的变化，但完全可预测}}};
+  \draw[mapflow] (l1.east) -- (r1.west);
+
+  % ---- 第 2 行：副本（在干扰到达之前）
+  \node[lb] (l2) at (0, -1.60)
+    {{\bfseries 运动指令副本（伴随放电）}\\{\figsub{在 EOD 发出前就到达}}};
+  \node[rb] (r2) at (7.4, -1.60)
+    {{\bfseries IMU 陀螺流}\\{\figsub{消费设备出厂自带：零额外硬件、零额外成本}}};
+  \draw[mapflow] (l2.east) -- (r2.west);
+
+  % ---- 第 3 行：负像
+  \node[lb] (l3) at (0, -3.20)
+    {{\bfseries 颗粒细胞时间基 + 负像}\\{\figsub{局部可塑性学出自干扰的预测}}};
+  \node[rb] (r3) at (7.4, -3.20)
+    {{\bfseries 逐格运行统计（负像 $\mu,\ \sigma^{2}$）}\\{\figsub{深度特征图上逐格统计：在线、无标注、无训练}}};
+  \draw[mapflow] (l3.east) -- (r3.west);
+
+  % ---- 第 4 行：残差
+  \node[lb] (l4) at (0, -4.80)
+    {{\bfseries 输出细胞残差}\\{\figsub{减掉负像，只上报没预测到的}}};
+  \node[rb] (r4) at (7.4, -4.80)
+    {{\bfseries 逐格 z 残差 $\rightarrow$ surprise}\\{\figsub{$z$ 的幅度；$\max|z|$ 即这一帧的新异度}}};
+  \draw[mapflow] (l4.east) -- (r4.west);
+
+  % ---- 第 5 行：读出
+  \node[lb] (l5) at (0, -6.40)
+    {{\bfseries 猎物检测}\\{\figsub{残差触发下游，信号不再被掩埋}}};
+  \node[rb] (r5) at (7.4, -6.40)
+    {{\bfseries 触发式片段存储}\\{\figsub{只有 keep 的片段写盘；未触发帧只留标量}}};
+  \draw[mapflow] (l5.east) -- (r5.west);
+
+\end{tikzpicture}

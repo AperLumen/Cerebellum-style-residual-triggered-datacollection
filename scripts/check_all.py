@@ -183,6 +183,25 @@ finally:
 '''
 
 
+def step_generate_figures() -> Step:
+    """图必须**先于** PDF 重建——否则 PDF 引用的是上一轮的旧图，
+    而 check 会报"通过"（图变了但没进 PDF，是最难发现的一类过期）。
+    """
+    return Step("重建图（TikZ→PDF/PNG）", [PY, "scripts/build_figures.py"],
+                note="GUIDE.pdf 与 README 的图都来自 figs/*.tikz")
+
+
+def step_generate_data_figures() -> Step:
+    """数据图（PIL，从 runs/*.json 算坐标）同样必须**先于** PDF 重建。
+
+    与结构图分开跑而不是合并进一个脚本：两者依赖不同（TikZ 要 xelatex，
+    数据图只要 PIL + runs/），失败时的排查方向也不同。分成两步以后，
+    "图没更新"能立刻区分是编译问题还是数据问题。
+    """
+    return Step("重建数据图（PIL）", [PY, "scripts/make_data_figures.py"],
+                note="读 runs/*.json 算坐标")
+
+
 def step_generate_pdf() -> Step:
     return Step("重建 GUIDE.pdf", [PY, "scripts/build_guide_pdf.py"],
                 note="纯派生物，变了会自动重建")
@@ -321,6 +340,26 @@ for doc in DOCS:
         checked += 1
         if not os.path.exists(os.path.join(ROOT, ref)):
             missing.append((doc, ref))
+    # 图：Markdown 图片语法里的路径。**必须单独扫**——上面的正则只认反引号
+    # 包裹的引用，而图是 `![说明](figs/x.png)`，两者语法不同。漏掉这条的话
+    # 把图路径写错（比如 figs/archh.png）不会有任何检查报错，直到有人打开
+    # README 才发现图是裂的。
+    #
+    # 两类图的产物集**不同**，不要用同一套要求：
+    #   * 结构图（figs/*.tikz）→ 有 .pdf（矢量，进 GUIDE.pdf）与 .png；
+    #   * 数据图（scripts/make_data_figures.py）→ **只有 .png**，因为它的
+    #     几何要从 runs/*.json 算出来，PIL 生成位图（见该脚本的模块文档）。
+    # 判据用"有没有 .tikz"来区分，不靠额外的登记表——少一处会忘的地方。
+    for stem in re.findall(r"!\[[^\]]*\]\((figs/[A-Za-z0-9_-]+)\.png\)", text):
+        checked += 1
+        if not os.path.exists(os.path.join(ROOT, stem + ".png")):
+            missing.append((doc, stem + ".png"))
+            continue
+        if os.path.exists(os.path.join(ROOT, stem + ".tikz")):
+            # 结构图：PDF 与 tikz 源都必须在
+            for ext in (".tikz", ".pdf"):
+                if not os.path.exists(os.path.join(ROOT, stem + ext)):
+                    missing.append((doc, stem + ext))
 print(f"检查 {checked} 处带路径的文件引用")
 if missing:
     print("以下引用指向不存在的文件：")
@@ -332,17 +371,40 @@ print("全部存在")
 
 
 def step_manifest() -> Step:
-    """manifest.json 必须合法，且其引用的实现/测试文件必须存在。"""
+    """manifest.json 必须合法，且其引用的实现/测试文件必须存在。
+
+    另外查**重复键**：`json.load` 对同名键只保留最后一个，前面的内容静默
+    消失。曾把图件登记写成顶层 `figures`，覆盖掉同名的 `runs/` 产物索引，
+    没有任何报错。
+    """
     return Step("manifest 一致性", [PY, "-c", MANIFEST_CHECK])
 
 
 MANIFEST_CHECK = r'''
 import json, os, sys
 ROOT = os.getcwd()
-m = json.load(open(os.path.join(ROOT, "manifest.json"), encoding="utf-8"))
+
+# **重复键先查**：json.load 对同名键只保留最后一个，前面的内容**静默消失**。
+# 这不是假想——图件登记曾用过顶层 `figures`，把同名的 `runs/` 产物索引整个
+# 覆盖掉，没有任何报错，直到偶然翻旧版本才发现。json 还接受重复键，所以这
+# 类丢失只能靠 object_pairs_hook 自己拦。
+dup = []
+def _hook(items):
+    seen = {}
+    for k, v in items:
+        if k in seen:
+            dup.append(k)
+        seen[k] = v
+    return seen
+with open(os.path.join(ROOT, "manifest.json"), encoding="utf-8") as fp:
+    m = json.load(fp, object_pairs_hook=_hook)
+if dup:
+    print(f"manifest.json 有重复键 {sorted(set(dup))}——同名内容会被静默丢弃")
+    sys.exit(1)
+
 bad = []
 # 顶层登记的结构化条目：其中列出的文件必须存在
-for key in ("format", "dataset_format", "input_contracts"):
+for key in ("format", "dataset_format", "input_contracts", "doc_figures"):
     entry = m.get(key)
     if not isinstance(entry, dict):
         continue
@@ -351,11 +413,38 @@ for key in ("format", "dataset_format", "input_contracts"):
         if isinstance(v, str) and not v.startswith(("http", "GUIDE.md §")):
             if not os.path.exists(os.path.join(ROOT, v)):
                 bad.append(f"{key}.{field} -> {v}")
-    for field in ("enforced_in", "tests"):
+    for field in ("enforced_in", "tests", "sources", "products", "styles"):
         for v in entry.get(field, []) or []:
-            if not os.path.exists(os.path.join(ROOT, v)):
+            # 数据图的源登记成 "scripts/make_data_figures.py#<name>"：
+            # `#` 之后是**函数名不是路径**，所以只查 `#` 前那一段。
+            path = v.split("#", 1)[0]
+            if not os.path.exists(os.path.join(ROOT, path)):
                 bad.append(f"{key}.{field} -> {v}")
-print(f"顶层条目: {[k for k in ('format','dataset_format','input_contracts') if k in m]}")
+# doc_figures 段存在时，sources 与 products 必须非空——一个"挂了名但没登记
+# 任何图"的段落在审计眼里是"有覆盖"，实际是空转。
+fig = m.get("doc_figures")
+if isinstance(fig, dict):
+    for field in ("sources", "products"):
+        if not fig.get(field):
+            bad.append(f"doc_figures.{field} 为空（登记了该段却没有任何{field}）")
+    # 图源与产物必须成对。**两类图的产物集不同**：
+    #   * 结构图（figs/x.tikz）→ 需要 x.pdf（矢量）+ x.png（README 用）
+    #   * 数据图（scripts/make_data_figures.py#x）→ **只有 x.png**
+    #     （PIL 生成，几何要从 runs/*.json 算，没有 TikZ 源，故无矢量版）
+    # 用 `#` 是否出现来区分，与 manifest 里的登记约定一致。
+    srcs = set(fig.get("sources") or [])
+    prods = set(fig.get("products") or [])
+    for s in sorted(srcs):
+        if "#" in s:
+            name = s.split("#", 1)[1]
+            if f"figs/{name}.png" not in prods:
+                bad.append(f"doc_figures: {s} 缺少产物 figs/{name}.png")
+            continue
+        stem = s[:-len(".tikz")] if s.endswith(".tikz") else s
+        for ext in (".pdf", ".png"):
+            if stem + ext not in prods:
+                bad.append(f"doc_figures: {s} 缺少产物 {stem}{ext}")
+print(f"顶层条目: {[k for k in ('format','dataset_format','input_contracts','doc_figures') if k in m]}")
 if bad:
     print("以上路径不存在：")
     for b in bad:
@@ -440,11 +529,26 @@ missing = [m for m in declared
 if missing:
     problems.append(f"公开版缺少 README/布局声明的模块: {missing}")
 
+# (e) 图必须与主版一致。公开版是**副本不是分支**，图一旦漂移，外部读者
+#     看到的就是过期的结构图——而这是他们对该项目的第一印象。
+#     图是二进制，filecmp 逐字节比最直接（PNG 的字节稳定性由 build_figures.py
+#     的逐像素写盘判据保证：内容没变就不重新编码）。
+import glob
+for src in sorted(glob.glob(os.path.join(ROOT, "figs", "*.png"))):
+    fn = os.path.basename(src)
+    dst = os.path.join(PE, "figs", fn)
+    if not os.path.exists(dst):
+        problems.append(f"public_edition/figs/{fn} 缺失（主版 figs/{fn} 有）")
+    elif not filecmp.cmp(src, dst, shallow=False):
+        problems.append(f"public_edition/figs/{fn} 已漂移（与主版不一致）——"
+                        f"先改 figs/*.tikz 重建，再同步这个副本")
+
 if problems:
     for x in problems:
         print("  ✗ " + x)
     sys.exit(1)
 print(f"  ✓ {len(shared_mods)} 个共享模块 + {len(shared_tests)} 个共享测试逐字节一致")
+print("  ✓ 图与主版一致")
 print("  ✓ 自包含（无主版绝对路径）")
 '''
 
@@ -505,7 +609,8 @@ def main() -> int:
                          step_ui_smoke(), step_doc_refs(), step_manifest(),
                          step_public_edition()]
     if not args.skip_pdf:
-        steps += [step_generate_pdf(), step_verify_pdf()]
+        steps += [step_generate_figures(), step_generate_data_figures(),
+                  step_generate_pdf(), step_verify_pdf()]
 
     results: list[tuple[Step, list[str]]] = []
     t_all = time.time()

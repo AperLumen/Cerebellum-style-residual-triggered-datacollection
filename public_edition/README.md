@@ -8,6 +8,10 @@ remains in the residual is genuinely new information in the world.
 **核心等式 / the core equation:** `residual = observation − prediction(self-motion)`
 → 残差里亮起来的，才值得占存储。/ whatever lights up in the residual deserves storage.
 
+![Overall architecture — a camera + IMU acquisition layer. IMU supplies the
+"corollary discharge" that makes self-motion predictable; only the residual is
+kept.](figs/arch.png)
+
 ```
 frontend (pluggable)      cancellation                triggering
 HWC uint8 frames      ->  feature maps  ->  gyro warp + z-residual  ->  adaptive

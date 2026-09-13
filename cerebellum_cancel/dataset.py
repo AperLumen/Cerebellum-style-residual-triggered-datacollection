@@ -161,6 +161,17 @@ def compute_keep(score: np.ndarray, fps: float,
     "这段为什么被存/被丢"的唯一记录，也是决策可复现契约的落点。
     早先版本用 ``surprise > median(surprise)`` 当占位符，结果每段都恰好
     keep 50%——那是中位数的定义，不是触发器的行为，会误导任何读这个字段的人。
+
+    **与逐帧 ``update`` 的一致性（2026-09-13 修复）**：此前末尾有一段
+    "按 clips 重刷掩码"，把 ``clips`` 的区间整段置 1。实测这会**多标 9 帧**
+    （该 9 帧在 ``update`` 里明确是 False）——因为 ``clips`` 的起点经过了
+    ``pre_roll`` 前移，而逐帧决策没有这一前移，两者语义不同：
+    ``clips`` 是"要保存的区间"（含前缀），``keep`` 是"触发器此刻是否在片段内"。
+
+    把它们混在一起会让同一个数据集里出现两种互相矛盾的"存/不存"记录。
+    正确做法：``keep`` **就是**逐帧决策（``run``/``replay`` 用的口径，
+    GUIDE §4.8 的 ``keep`` 不变量），需要含前缀的区间请读 ``clips`` /
+    ``Segment``——那里已经通过 ``pre_roll`` 表达。
     """
     from .core import AdaptiveTrigger, TriggerConfig
 
@@ -171,10 +182,7 @@ def compute_keep(score: np.ndarray, fps: float,
     for i in range(1, n):
         on = trig.update(i / fps, float(score[i]), fps)
         keep[i] = 1 if on else 0
-    clips = trig.finalize(n / fps)
-    # finalize 可能会把尾部未关闭的 clip 补上，按 clips 重刷一次掩码
-    for a, b in clips:
-        keep[max(int(a * fps), 0):min(int(b * fps) + 1, n)] = 1
+    trig.finalize(n / fps)      # 关闭尾部开放片段（结果落在 trig.clips）
     return keep
 
 

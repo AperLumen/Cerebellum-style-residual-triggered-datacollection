@@ -115,12 +115,56 @@ def test_trigger_merges_short_gaps():
 
 
 def test_trigger_finalize_opens_clip_at_end():
-    cfg = TriggerConfig()
+    cfg = TriggerConfig(pre_roll=0.0)        # 关掉前缀，单独验 onset 时刻
     tr = SurpriseTrigger(cfg, fps=30.0)
     for i in range(5):
         tr.update(i / 30, 8.0, 1.0)
     clips = tr.finalize(10.0)
     assert clips == [(4 / 30, 10.0)]  # onset lands on the 5th frame
+
+
+def test_trigger_finalize_applies_pre_roll():
+    """``TriggerConfig.pre_roll`` 必须真的回退片段起点（2026-09-13 修复）。
+
+    修复前该字段**从未被读取**：onset=4/30 时片段起点就是 4/30，
+    事件的前兆帧一帧都不留——静默地少一段，片段看起来完全正常。
+    """
+    cfg = TriggerConfig(pre_roll=0.2)
+    tr = SurpriseTrigger(cfg, fps=30.0)
+    for i in range(5):
+        tr.update(i / 30, 8.0, 1.0)
+    clips = tr.finalize(10.0)
+    assert len(clips) == 1
+    start, end = clips[0]
+    # 4/30 - 0.2 = 0.1333 - 0.2 < 0 -> 夹到 0
+    assert np.isclose(start, 0.0), f"pre_roll 未回退起点: {start}"
+    assert np.isclose(end, 10.0)
+
+
+def test_pre_roll_clamps_at_zero_and_keeps_late_clips_exact():
+    """起点不得为负；且 pre_roll 必须相对**未回退**的起点精确前移。
+
+    对照口径：同一个序列跑两遍，只改 ``pre_roll``。onset 因 z-EMA 平滑会
+    比事件真起点晚几帧（这是触发器的既有性质，不是本测试要测的），所以
+    基准取"pre_roll=0 时的起点"，而不是理论事件时刻。
+    """
+    def run(pre: float) -> float:
+        cfg = TriggerConfig(pre_roll=pre, threshold_k=6.0, off_k=2.5)
+        tr = SurpriseTrigger(cfg, fps=30.0)
+        for i in range(60):
+            tr.update(i / 30, 0.1, 1.0)
+        for i in range(60, 70):
+            tr.update(i / 30, 20.0, 1.0)
+        clips = tr.finalize(70 / 30)
+        assert clips, "应触发至少一个片段"
+        return clips[0][0]
+
+    base = run(0.0)
+    shifted = run(0.5)
+    assert shifted >= 0.0, f"起点为负: {shifted}"
+    assert np.isclose(shifted, base - 0.5, atol=1e-6), (
+        f"pre_roll 未精确前移: base={base:.4f}, shifted={shifted:.4f}, "
+        f"期望 {base - 0.5:.4f}")
 
 
 def _run_adaptive(base, noise_sd, spike, n_calm=300, n_spike=10):

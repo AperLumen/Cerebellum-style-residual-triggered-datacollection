@@ -236,6 +236,12 @@ def main():
             specs = [(label, "cb", 1.0)]
             specs += [(f"uniform({m:g}x)", "uniform", m) for m in mults]
             specs += [(f"oracle({mode})", "oracle", 1.0)]
+            # **全量基线必须留着**（2026-09-13 加）：判据是"筛选有没有价值"，
+            # 而这要求这张表本身有分辨力。若"存 100%"不比"存 3.4%"好，说明
+            # 这个下游任务对数据量不敏感，表里所有 1σ 重合都不是方法的证据。
+            # 真实数据那边（run_downstream_aoe_cv.py）漏了这一行，导致 §2.3.6
+            # 的结论被误读成"方法不行"——补跑 all(100%) 才发现是尺子坏了。
+            specs += [("all(100%)", "all", 1.0)]
             print(f"{'method':<20}{'stored':>8}{'frames':>8}{'val AP':>9}{'evRec@10%':>11}")
             for name, kind, mult in specs:
                 Xs, ys, fracs = [], [], []
@@ -243,6 +249,8 @@ def main():
                     n = min(len(feats), len(labels))
                     if kind == "cb":
                         mask = seq_masks[mode]
+                    elif kind == "all":
+                        mask = np.ones(n, dtype=bool)
                     elif kind == "oracle":
                         mask = oracle_frames(seq_masks[mode].mean(), labels[:n])
                     else:
