@@ -339,6 +339,18 @@
    "headline": "NEGATIVE, decisive: zamp AP is bit-identical across all three storage methods (0.129+-0.098) -- logistic learns zero weights on a signal-free feature and AP collapses to the val event-rate constant; zpyr ~= zamp (spatial pattern adds nothing); feat+zpyr ~= feat (no complementarity); high z-readout evRec (0.84-0.87) is a budget artifact. The z-map carries no event-discriminative information in amplitude OR spatial pattern -- the last value exit inside the motion-prediction framing is closed."
   },
   {
+   "path": "runs/event_profile.json",
+   "producer": "scripts/profile_events.py",
+   "note": "Event-content profiling on the 10 event segments (GUIDE 2.3.7 item 5, 2026-09-14): per-event profiles of residual z (maxcell), gyro norm and translation norm in a +/-2s window around each of the 89 annotated event intervals (drop/throw/toss/break), plus per-segment inside/outside medians and frame-level AUCs. Robust-stats cancellation layer via the production score_seq path.",
+   "headline": "Events are NOT residual spikes: median z inside / outside events = 0.89 (events are camera-still intervals); frame-level AUC -- residual z 0.51, gyro 0.62, featmap diff 0.55; peak alignment at chance level (z peak inside interval 28%, gyro 27%). Mechanism: events land in calm periods, where the self-motion pathway has no input -- consistent with the published domain boundary, now with a mechanism account."
+  },
+  {
+   "path": "runs/event_driven_sim.json",
+   "producer": "scripts/sim_event_driven.py",
+   "note": "Event-driven architecture simulation (GUIDE 2.3.7 item 5, 2026-09-14): a cheap monitor (pooled |dF| diff, 0.009 ms/frame measured) gates the full cancellation layer (0.091 ms/frame measured, dense 0.99 ms with published 0.9 ms backbone). Monitor clips go through the production clips_for_score 'adaptive' protocol; dense baseline uses maxcell_score(z) (the released readout). Re-entry modes: stale (F_prev from last processed frame) and bridged (gap-integrated gyro warp). Threshold swept k in {2,3,4,6,9,14}.",
+   "headline": "No viable operating point: razor-thin -- k=2 duty 0.68, event recall 0.89, dense_cov 0.10, z-corr 0.83, cost 0.67 ms (-32%); k=3 duty 0.13, recall 0.17-0.32, z-corr 0.53, cost 0.14 ms (-86%); k>=4 all zero. Domain inversion: naive diff fires on self-motion bursts (what the cancellation layer subtracts) and sleeps during calm periods (where the residual is cleanest). Bridged re-entry consistently worse than stale (0.69 vs 0.83 corr), mechanism unresolved, recorded as-is."
+  },
+  {
    "path": "runs/flow_eval_walk.json",
    "producer": "scripts/run_flow_eval.py",
    "note": "Walking-level probe (roadmap item 2): 4 high-motion large-scene Open-AoE segments (data/aoe_motion_walk, selected by scripts/select_walk_segments.py, gyro p95 71-75 deg/s: field/kitchen/balcony/multi-room). Quality (robust, calm residual) + latency. Backup of the flow_eval.json output of that run; frames deleted after eval (featmaps/imu/events kept, regenerable).",

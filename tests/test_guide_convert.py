@@ -1263,89 +1263,40 @@ def test_narrow_column_beats_the_median_trap():
     assert w[0] >= lens[-2] * 0.55, (
         f"权重 {w[0]} 低于「第二长 × 0.55」={lens[-2] * 0.55:.1f}")
 
-# ============================ 选择性分栏的结构约束（2026-09-13）
+# ============================ 分栏已定：整篇单栏（2026-09-14）
 #
-# 用户要求"可以选择性地两栏"。分栏能成立靠三条不变量，每条都踩过坑。
+# 2026-09-13 曾做"选择性两栏"，同日用户改定不要分栏（"分栏了之后看起来
+# 很难受"）。下面的测试钉住单栏决定，防 multicols 悄悄回归。
 
 
-def test_two_column_keeps_tables_out_of_columns():
-    r"""**`longtable` 绝不能进 `multicols`**——它会直接报
-    `! Package longtable Error: longtable not in 1-column mode.`
+def test_single_column_no_multicols_anywhere():
+    r"""**全文不得出现 `multicols`**——2026-09-14 用户定调整篇单栏。
 
-    这条坑的可怕之处：**不加 `-halt-on-error` 时退出码仍是 0、PDF 照生**
-    （只是少了内容），我一度以为编译成功了。
+    注：整篇 `twocolumn` 同样不允许——65 张 `longtable` 会报
+    `! Package longtable Error: longtable not in 1-column mode.`（且不加
+    `-halt-on-error` 时退出码仍是 0、PDF 照生缺内容）。
 
-    **注入验证**：让 `_TWOCOL_FULLWIDTH` 不匹配表格（比如去掉 `longtable`
-    那一支），这条必须变红。
-    """
-    from build_guide_pdf import make_two_column, md_to_tex_body
-    tex = make_two_column(md_to_tex_body(open(os.path.join(ROOT, "GUIDE.md"), encoding="utf-8").read()))
-    # 把正文按 multicols 分段，检查每段内部**没有** longtable
-    depth = 0
-    bad = []
-    for line in tex.split("\n"):
-        if "\\begin{multicols}" in line:
-            depth += 1
-        elif "\\end{multicols}" in line:
-            depth -= 1
-        elif depth > 0 and "\\begin{longtable}" in line:
-            bad.append(line[:60])
-    assert not bad, f"有 longtable 落在 multicols 内部: {bad[:3]}"
-
-
-def test_two_column_wraps_prose_but_leaves_blocks_full_width():
-    r"""**正文要包起来、通栏块要留在外面**。
-
-    两个方向都要查，因为两种错误都很隐蔽：
-      * 正文没包 → 分栏根本没生效（页数不变，看起来"成功了"）；
-      * 通栏块被包 → `longtable` 报错（见上一条）。
-
-    **注入验证**：把 `make_two_column` 的包裹关掉，这条必须变红。
-    """
-    from build_guide_pdf import make_two_column, md_to_tex_body
-    tex = make_two_column(md_to_tex_body(open(os.path.join(ROOT, "GUIDE.md"), encoding="utf-8").read()))
-    n_col = tex.count("\\begin{multicols}")
-    n_tab = tex.count("\\begin{longtable}")
-    assert n_col > 50, f"只切出 {n_col} 个分栏段——分栏没生效？"
-    assert n_tab > 50, f"只剩 {n_tab} 张表——表格被改写了？"
-
-
-def test_two_column_keeps_headings_figures_equations_out_of_columns():
-    r"""**标题、图、公式必须留在通栏，不得被包进 `multicols`**。
-
-    2026-09-13 二轮用户反馈"不是全部都两栏"：第一版把标题、图、公式
-    全裹进了半栏——标题在栏里够不着版心宽度、图被缩到栏宽。这条钉死
-    回归点：**section/subsection 级标题、figure 的 minipage、`equation*`
-    显示公式，一律不得出现在 `multicols` 内部**。
-
-    （`paragraph` 级小标题是例外：它字号小、专为正文段落服务，
-    本就该跟着正文进栏——所以这里只查 `section`，不查 `paragraph`。）
-
-    **注入验证**：把 `_TWOCOL_FULLWIDTH` 里 5b 那一支（编号标题）删掉，
+    **注入验证**：在 `make_two_column` 里加回 `\begin{multicols}{2}` 包裹，
     这条必须变红。
     """
-    import re
     from build_guide_pdf import make_two_column, md_to_tex_body
     tex = make_two_column(md_to_tex_body(open(os.path.join(ROOT, "GUIDE.md"), encoding="utf-8").read()))
-    depth = 0
-    bad = []
-    for line in tex.split("\n"):
-        if "\\begin{multicols}" in line:
-            depth += 1
-        elif "\\end{multicols}" in line:
-            depth -= 1
-        elif depth > 0:
-            # section/subsection 级标题（排除更小的 paragraph）。
-            # 两种形态：无编号 `\phantomsection\addcontentsline{toc}{section|subsection}...`
-            # 与编号 `\section{...} / \subsection{...}`；paragraph 级刻意放行。
-            if re.match(r"^\\phantomsection\\addcontentsline\{toc\}\{(?:sub)*section\}", line) \
-               or re.match(r"^\\(?:sub)*section\*?\{", line):
-                bad.append(("标题", line[:60]))
-            if "\\includegraphics" in line:
-                bad.append(("图", line[:60]))
-            if "\\begin{equation*}" in line:
-                bad.append(("公式", line[:60]))
-    assert not bad, f"有通栏元素被包进 multicols: {bad[:3]}"
+    assert "\\begin{multicols}" not in tex, "全文单栏，不得出现 multicols"
+
+
+def test_single_column_tables_intact():
+    r"""**撤掉分栏不能把表格改写坏**——`longtable` 必须原样保留。
+
+    历史事故：为分栏把 longtable 转 tabular 时踩过空行 = `\par` 报错、
+    `\vbox` 溢出静默截行（`[成立]` 15 次变 14 次）两类坑。撤分栏同样
+    只允许"不包"，不允许"改写"。
+
+    **注入验证**：在 `make_two_column` 里删掉表格内容，这条必须变红。
+    """
+    from build_guide_pdf import make_two_column, md_to_tex_body
+    tex = make_two_column(md_to_tex_body(open(os.path.join(ROOT, "GUIDE.md"), encoding="utf-8").read()))
+    n_tab = tex.count("\\begin{longtable}")
+    assert n_tab > 50, f"只剩 {n_tab} 张表——表格被改写了？"
 
 
 def test_two_column_breakpoints_keep_braces_balanced():

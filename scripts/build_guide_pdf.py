@@ -1768,9 +1768,13 @@ def md_to_tex_body(md: str) -> str:
     return convert(md)
 
 
-# =============================================== 选择性分栏
+# =============================================== 分栏（已定：整篇单栏）
 #
-# **为什么是"选择性"而不是整篇两栏**（2026-09-13，用户要求）：
+# 注：本节原为"选择性两栏"实现，2026-09-14 用户改定——**不要分栏，全部横着
+# （单栏）**，"分栏了之后看起来很难受"。`make_two_column` 已改为恒等函数；
+# 下方 `_TWOCOL_*` 常量随之停用、留作历史（未来再想分栏时连同坑实录参考）。
+#
+# **原理由（2026-09-13，用户要求"可以选择性地两栏"）：**
 #
 # 整篇 `twocolumn` 做不到——文档里有 65 张 `longtable`，它会直接报
 # `! Package longtable Error: longtable not in 1-column mode.`（实测；
@@ -1822,34 +1826,12 @@ _TWOCOL_BREAKABLE = (
 
 
 def make_two_column(body: str) -> str:
-    """把**够长的正文段**包进 `multicols`，其余（表格/代码/图/公式/标题/
-    短段）留在通栏——即"按需分栏"，不是整篇两栏。
+    """恒等返回——2026-09-14 起 GUIDE.pdf 整篇单栏，不再分栏。
 
-    做法：把 TeX 正文按"通栏块"切成交替的段；对每个**非通栏**的段，
-    只有可见字数 ≥ `_TWOCOL_MIN_CHARS` 才包上
-    ``\\begin{multicols}{2} ... \\end{multicols}``，短的就留在通栏。
+    保留函数名与签名：调用点与测试都引用它，恒等实现让"单栏"成为
+    可断言的行为（全文不得出现 `multicols`）。
     """
-    body = body.replace(*_TWOCOL_BREAKABLE)
-    segs: list[str] = []
-    i = 0
-    for m in _TWOCOL_FULLWIDTH.finditer(body):
-        segs.append(body[i:m.start()])
-        segs.append("\x00" + m.group(0))      # \x00 标记"这段是通栏"
-        i = m.end()
-    segs.append(body[i:])
-
-    parts: list[str] = []
-    for seg in segs:
-        if seg.startswith("\x00"):
-            parts.append(seg[1:])
-            continue
-        t = seg.strip("\n")
-        # 按需分栏：太短的正文段留着通栏，硬掰两栏只会"左满右空"
-        if t.strip() and _plain_len(t) >= _TWOCOL_MIN_CHARS:
-            parts.append("\\begin{multicols}{2}\n" + t + "\n\\end{multicols}")
-        elif t.strip():
-            parts.append(t)
-    return "\n\n".join(parts)
+    return body
 
 
 def main() -> int:
@@ -1858,10 +1840,7 @@ def main() -> int:
         return 1
 
     body = make_two_column(md_to_tex_body(open(SRC, encoding="utf-8").read()))
-    preamble = PREAMBLE.replace(
-        "\\usepackage{longtable}",
-        "\\usepackage{longtable}\n\\usepackage{multicol}", 1)
-    assert "\\usepackage{multicol}" in preamble, "multicol 未注入"
+    preamble = PREAMBLE  # 单栏（2026-09-14）：multicol 随分栏一并撤下
     tex = preamble + body + "\n\\end{document}\n"
 
     # --- 自检：转换后不得残留未展开的 LaTeX 命令字面量 ---

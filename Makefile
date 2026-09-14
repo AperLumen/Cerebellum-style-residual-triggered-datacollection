@@ -5,7 +5,8 @@
 
 PY ?= .venv/bin/python
 
-.PHONY: help check check-all fix test types pdf guide clean-guide
+.PHONY: help check check-all fix test types pdf guide clean-guide \
+        day-close drift-check drift-update hooks
 
 help:
 	@echo "make check      一键验收（快速失败）—— 提交前跑这个"
@@ -19,6 +20,12 @@ help:
 	@echo "用数据跑一次（引擎 CLI）："
 	@echo "  .venv/bin/python scripts/cmci.py run <video> --imu <csv> --out ./out"
 	@echo "  .venv/bin/python scripts/cmci.py run <video> --out ./out --dry-run"
+	@echo ""
+	@echo "协作闸门（防隐形改动 / 防幻觉，见 AGENTS.md）："
+	@echo "  make day-close     每日收尾：make check 全绿 → 单提交 → 移基线 tag"
+	@echo "  make drift-check   配置默认值漂移检查"
+	@echo "  make drift-update  有意调参后更新基线（需先立 manifest 条目）"
+	@echo "  make hooks         安装 pre-commit 快速闸门（漂移 + 溯源）"
 
 check:
 	@$(PY) scripts/check_all.py
@@ -43,3 +50,15 @@ guide:
 clean-guide:
 	@rm -f guide.tex guide.aux guide.log guide.out guide.toc
 	@echo "已清理 LaTeX 中间产物（GUIDE.pdf 保留）"
+
+day-close:
+	@$(PY) scripts/day_close.py $(ARGS)
+
+drift-check:
+	@$(PY) scripts/check_drift.py
+
+drift-update:
+	@$(PY) scripts/check_drift.py --update
+
+hooks:
+	@$(PY) scripts/install_hooks.py

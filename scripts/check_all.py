@@ -454,6 +454,24 @@ print("manifest 引用的文件全部存在")
 '''
 
 
+def step_config_drift() -> Step:
+    """配置默认值漂移检查——防"顺手调参"（见 scripts/check_drift.py）。
+
+    阈值/学习率/网格这类 dataclass 默认值是测量基础设施，GUIDE 的全部
+    数字建立在它们之上。本步骤把"默认值没变"变成可断言的不变量。
+    """
+    return Step("配置漂移检查",
+                [PY, os.path.join(ROOT, "scripts", "check_drift.py")])
+
+
+def step_requirements() -> Step:
+    """需求溯源——每个改动的 .py 必须能回溯到 requirement_manifest.json
+    里一条带用户原话的条目（防 AI 幻觉/伪需求，见 scripts/check_requirements.py）。
+    """
+    return Step("需求溯源检查",
+                [PY, os.path.join(ROOT, "scripts", "check_requirements.py")])
+
+
 def step_public_edition() -> Step:
     """公开子集（public_edition/）必须：(a) 自包含可跑，(b) 与主版共享的
     文件不漂移。
@@ -604,9 +622,10 @@ def main() -> int:
         print(f"找不到 venv python: {PY}", file=sys.stderr)
         return 2
 
-    steps: list[Step] = [step_tests(), step_pyright(), step_fuzz(),
-                         step_fuzz_protocol(), step_engine_smoke(),
-                         step_ui_smoke(), step_doc_refs(), step_manifest(),
+    steps: list[Step] = [step_tests(), step_pyright(), step_config_drift(),
+                         step_fuzz(), step_fuzz_protocol(),
+                         step_engine_smoke(), step_ui_smoke(), step_doc_refs(),
+                         step_manifest(), step_requirements(),
                          step_public_edition()]
     if not args.skip_pdf:
         steps += [step_generate_figures(), step_generate_data_figures(),

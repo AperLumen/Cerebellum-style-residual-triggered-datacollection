@@ -1,0 +1,45 @@
+{
+ "_readme": "需求溯源台账：每个改动的 .py 文件必须先有覆盖它的条目，否则 make check 的'需求溯源检查'失败。条目字段：id（唯一）/ date / source（用户原话，逐字引用，AI 自拟的需求无效）/ summary（一句话：做什么、为什么）/ files（fnmatch 模式，指向被该需求授权的 .py）。",
+ "requirements": [
+  {
+   "id": "req-2026-09-14-layout-single-column",
+   "date": "2026-09-14",
+   "source": "用户原话：\"我觉得还是全部横屏比较好，就是你分栏了之后看起来很难受\"；\"这也不是横着的呀，这是两列的，我不要分栏。\"",
+   "summary": "GUIDE.md 全部列表转横排 + GUIDE.pdf 撤掉选择性两栏（multicols）改整篇单栏",
+   "files": [
+    "scripts/build_guide_pdf.py",
+    "tests/test_guide_convert.py",
+    "GUIDE.md",
+    "README.zh.md"
+   ]
+  },
+  {
+   "id": "req-2026-09-14-event-negresult",
+   "date": "2026-09-14",
+   "source": "用户此前定下的实验计划：稀疏物理事件负结果（事件剖面 + 事件驱动仿真）",
+   "summary": "profile_events.py / sim_event_driven.py——产出 runs/event_profile.json、runs/event_driven_sim.json",
+   "files": [
+    "scripts/profile_events.py",
+    "scripts/sim_event_driven.py"
+   ]
+  },
+  {
+   "id": "req-2026-09-14-collab-gates",
+   "date": "2026-09-14",
+   "source": "用户原话：\"我不希望有所谓的隐形 bug……每一次修改之后都应该提交一个整体的方案\"；\"AI 的幻觉问题以及 AI 的伪需求……某个参数可能因为一些策略性或适应性的调整而出现问题，那是无法接受的。\"",
+   "summary": "建立协作闸门：day_close 每日单提交 + check_drift 参数漂移检查 + check_requirements 需求溯源 + AGENTS.md 协作规则",
+   "files": [
+    "scripts/check_drift.py",
+    "scripts/check_requirements.py",
+    "scripts/day_close.py",
+    "scripts/install_hooks.py",
+    "scripts/check_all.py",
+    "tests/test_dev_gates.py",
+    "AGENTS.md",
+    "Makefile",
+    "config_baseline.json",
+    "requirement_manifest.json"
+   ]
+  }
+ ]
+}
