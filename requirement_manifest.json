@@ -40,6 +40,28 @@
     "config_baseline.json",
     "requirement_manifest.json"
    ]
+  },
+  {
+   "id": "req-2026-09-18-guide-cold-toc",
+   "date": "2026-09-18",
+   "source": "用户原话：\"看看有啥可以继续完善的\"；\"修复一下 guide 然后开始处理项目\"（授权按上次列出的优先级处理）",
+   "summary": "修冷启动目录页码错 2 页：build_guide_pdf.py 改为编译到目录页码收敛（原来固定两遍，make clean-guide 后目录写 3 页而实际在 5 页，且所有自检照绿）；verify_guide_pdf.py 新增\"目录页数字 vs 书签实际指向页\"自检，使该缺陷不能再静默回来",
+   "files": [
+    "scripts/build_guide_pdf.py",
+    "scripts/verify_guide_pdf.py"
+   ]
+  },
+  {
+   "id": "req-2026-09-18-doc-baseline-guard",
+   "date": "2026-09-18",
+   "source": "用户原话：\"看看有啥可以继续完善的\"；\"修复一下 guide 然后开始处理项目\"（授权按上次列出的优先级处理）",
+   "summary": "AGENTS.md 声称的基线数字没有机器核对（写 13 步、实际 15 步；写 537 passed、实际 541）：check_all.py 抽出 build_steps() 以便从实现取真值；AGENTS.md 与 install_hooks.py 更新为实测数字；tests/test_dev_gates.py 加守卫钉住\"文档声称的步数 == 实现步数\"",
+   "files": [
+    "scripts/check_all.py",
+    "scripts/install_hooks.py",
+    "tests/test_dev_gates.py",
+    "AGENTS.md"
+   ]
   }
  ]
 }

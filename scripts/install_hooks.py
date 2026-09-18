@@ -18,7 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = """#!/bin/sh
 # pre-commit 快速闸门（scripts/install_hooks.py 安装）
 # 提交前拦截两类隐形改动：配置默认值漂移、无需求条目的 .py 改动。
-# 全量验收（make check 13 步）由 make day-close 在每个工作日收尾强制。
+# 全量验收（make check 15 步）由 make day-close 在每个工作日收尾强制。
 ROOT="$(git rev-parse --show-toplevel)"
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"

@@ -601,12 +601,100 @@ def step_tests_baseline(step: Step) -> list[str]:
     m2 = re.search(r"(\d+) failed", tail)
     if m2 and int(m2.group(1)) > 0:
         problems.append(f"有 {m2.group(1)} 个测试失败（基线为 0）")
-    if n_pass < 190:
-        problems.append(f"通过数 {n_pass} 明显低于预期（基线 ~201）")
+
+    # **文档声称的基线必须与实测一致**（2026-09-18 加）。
+    # 病灶：AGENTS.md 长期写着"537+ passed / 13 步"，而实现早已是
+    # 541 / 15 步，两边脱钩且无任何检查发现——正是本项目守则第 6 条说的
+    # "一个总在报有变化的门会被训练成没人看"，反向形态：**一个从不报错的
+    # 文档数字，没人会去维护它**。
+    problems.extend(doc_baseline_problems(n_pass))
+    return problems
+
+
+DOC_BASELINE_MIN_RATIO = 0.98  # 文档通过数不得低于实测的 98%（见下）
+AGENTS_MD = os.path.join(ROOT, "AGENTS.md")
+
+
+def doc_baseline_problems(n_pass: int, *, agents_text: str | None = None,
+                          n_steps: int | None = None) -> list[str]:
+    """核对 `AGENTS.md` 里声称的基线数字与实测是否一致。
+
+    判据写在这里（而不是另一份测试文件）的原因：`make check` 本来就刚跑完
+    pytest，`n_pass` 是**实测值**；再起一个测试进程去跑一遍是浪费，而且那种
+    "在测试里复现生产逻辑"的写法正是本项目记过的第 5 类静默失效。
+
+    参数 `agents_text` / `n_steps` 只为测试注入而存在（默认读真文件、用
+    `build_steps()` 的真实步数）。**注入时也必须走这个函数**，不能在测试里
+    自己写一遍正则——那会变成"测试里复制了一份实现"。
+    """
+    problems: list[str] = []
+    if agents_text is None:
+        if not os.path.exists(AGENTS_MD):
+            return [f"找不到 {AGENTS_MD}（协作规则文档不见了？）"]
+        with open(AGENTS_MD, encoding="utf-8") as fp:
+            agents_text = fp.read()
+    if n_steps is None:
+        n_steps = len(build_steps(skip_pdf=False))
+
+    # ① pytest 通过数：文档写 "pytest NNN+ passed"，要求 NNN 是真实下限
+    #    （既不能高于实测，也不能低到失去意义）。
+    #    **为什么是 2% 而不是 5%**：5% 意味着要新增 27 个测试才触发一次，
+    #    而一次典型改动只加个位数——文档会一路漂到没人认得出，守卫名义上
+    #    在守着、实际永不报错（守则 6 的反面形态）。2%（约 11 个测试）足够
+    #    容下一次中等规模的测试增补，又不至于让数字烂掉。
+    m = re.search(r"pytest\s+(\d+)\+\s*passed", agents_text)
+    if not m:
+        problems.append(
+            "AGENTS.md 里找不到 `pytest NNN+ passed` 形式的基线声明"
+            "（这条守卫读不到数就等于没有守卫）")
+    else:
+        claimed = int(m.group(1))
+        floor = int(n_pass * DOC_BASELINE_MIN_RATIO)
+        if claimed > n_pass:
+            problems.append(
+                f"AGENTS.md 声称 pytest {claimed}+ passed，实测只有 "
+                f"{n_pass}——文档高于现实")
+        elif claimed < floor:
+            problems.append(
+                f"AGENTS.md 声称 pytest {claimed}+ passed，实测 {n_pass}"
+                f"——文档落后超过 {int((1 - DOC_BASELINE_MIN_RATIO) * 100)}%，"
+                f"阈值已经没有约束力，请更新为 {n_pass}")
+
+    # ② 验收步数：文档写 "make check N 步全绿"，要求与实现完全一致
+    m = re.search(r"make check[`\s]*(\d+)\s*步", agents_text)
+    if not m:
+        problems.append(
+            "AGENTS.md 里找不到 `make check N 步` 形式的步数声明")
+    else:
+        claimed = int(m.group(1))
+        if claimed != n_steps:
+            problems.append(
+                f"AGENTS.md 声称 make check {claimed} 步，实现是 {n_steps} "
+                f"步（含 PDF 4 步）——请改成 {n_steps}")
+
     return problems
 
 
 # --------------------------------------------------------------------- 主流程
+
+def build_steps(*, skip_pdf: bool = False) -> list[Step]:
+    """构造验收步骤列表——**单一事实来源**。
+
+    抽成函数（2026-09-18）是为了让"文档声称的步数"可被机器核对：此前
+    `AGENTS.md` 写"make check 13 步"，而实现早已是 11 + 4 = **15 步**，
+    两边脱钩且没有任何检查发现。现在 `tests/test_dev_gates.py` 从本函数
+    取真值，与文档里的数字对账。
+    """
+    steps: list[Step] = [step_tests(), step_pyright(), step_config_drift(),
+                         step_fuzz(), step_fuzz_protocol(),
+                         step_engine_smoke(), step_ui_smoke(), step_doc_refs(),
+                         step_manifest(), step_requirements(),
+                         step_public_edition()]
+    if not skip_pdf:
+        steps += [step_generate_figures(), step_generate_data_figures(),
+                  step_generate_pdf(), step_verify_pdf()]
+    return steps
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="一键验收")
@@ -622,14 +710,7 @@ def main() -> int:
         print(f"找不到 venv python: {PY}", file=sys.stderr)
         return 2
 
-    steps: list[Step] = [step_tests(), step_pyright(), step_config_drift(),
-                         step_fuzz(), step_fuzz_protocol(),
-                         step_engine_smoke(), step_ui_smoke(), step_doc_refs(),
-                         step_manifest(), step_requirements(),
-                         step_public_edition()]
-    if not args.skip_pdf:
-        steps += [step_generate_figures(), step_generate_data_figures(),
-                  step_generate_pdf(), step_verify_pdf()]
+    steps = build_steps(skip_pdf=args.skip_pdf)
 
     results: list[tuple[Step, list[str]]] = []
     t_all = time.time()

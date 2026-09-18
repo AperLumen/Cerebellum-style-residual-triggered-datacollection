@@ -80,6 +80,23 @@ def walk_outline(items):
     return out
 
 
+def walk_outline_nodes(items):
+    """同 walk_outline，但**保留节点对象本身**——判"目录写第几页"时需要
+    `get_destination_page_number(node)`。标题里可能重名，用对象比用标题查
+    更稳（标题查会撞上第一个同名节点）。"""
+    out = []
+
+    def rec(nodes, depth):
+        for n in nodes:
+            if isinstance(n, list):
+                rec(n, depth + 1)
+            else:
+                out.append((n, depth, n.title))
+
+    rec(items, 0)
+    return out
+
+
 def main() -> int:
     if not os.path.exists(PDF):
         print(f"找不到 {PDF}", file=sys.stderr)
@@ -254,6 +271,78 @@ def main() -> int:
     if not fig_missing and form_xo >= len(vec_refs):
         print(f"    ✓ {len(vec_refs)} 张结构图以矢量嵌入，"
               f"{len(raster_refs)} 张数据图为位图（符合设计）")
+    print()
+
+    # --- 5. 目录页码与书签实际指向页是否一致
+    # **这是"编译成功但产物是坏的"里最后一类没被检查的**，2026-09-18 补。
+    #
+    # 目录页里那一串页码是 LaTeX 从 `guide.toc` 读出来**印上去**的；而书签
+    # 的目标页是 PDF 内部结构（`get_destination_page_number`），**不读 .toc**。
+    # 两者是同一份信息的两条独立路径——所以可以让它们互相校验。
+    #
+    # 实测的成因（冷启动编译）：`make clean-guide` 清掉 `guide.toc` 后只编译
+    # 两遍不够，产物把 §5 印在第 56 页而书签指向第 58 页。**而当时所有自检
+    # 全绿**：0 溢出、0 丢字、书签树/GoTo 数/锚点命中都正常（它们都不看目录
+    # 页码）。修法在 build_guide_pdf.py（编译到收敛），本条是它的守卫。
+    #
+    # 判据来自**印在页面上的字符**（不是 `guide.toc`）：读第 2 页起、到正文
+    # 第一页之前的目录页文本，取每个条目的"末尾数字"，再拿同名书签的实际
+    # 目标页比对。这样测的是读者真正看到的东西。
+    def _norm(s: str) -> str:
+        return re.sub(r"[\s.·…]+", "", s or "")
+
+    # 目录条目在抽出的文本里形如「§5 证据索引与路线图 56」或
+    # 「先看这里：五分钟跑通 . . . . 3」——省略点可能被抽成各种形态，
+    # 所以按"标题 + 可选空白/点 + 数字"取，且**从右往左**取最后一个数字。
+    printed: dict[str, int] = {}
+    for pi in range(1, len(r.pages)):
+        t = r.pages[pi].extract_text() or ""
+        # 目录页的判据：出现大量省略点或"目录"字样；正文页不会有成片的点线
+        if t.count("...") + t.count(". .") < 5:
+            continue
+        for raw in t.splitlines():
+            m = re.match(r"^(.*?)[\s.·…]*(\d+)\s*$", raw.strip())
+            if not m or not m.group(1).strip():
+                continue
+            title, page = m.group(1), int(m.group(2))
+            key = _norm(title)
+            if 3 <= page <= len(r.pages):
+                printed.setdefault(key, page)
+
+    toc_bad, toc_checked = [], 0
+    for node, depth, title in walk_outline_nodes(r.outline):
+        key = _norm(title)
+        hit = printed.get(key)
+        if hit is None:
+            # 去掉可能的 § 前缀再试一次（目录与书签的 § 写法偶有差异）
+            alt = _norm(re.sub(r"^§+", "", title or ""))
+            hit = next((v for k, v in printed.items()
+                        if _norm(re.sub(r"^§+", "", k)) == alt), None)
+        if hit is None:
+            continue
+        try:
+            dest = r.get_destination_page_number(node)
+        except Exception:   # noqa: BLE001
+            continue
+        # 目标不是某一页时 pypdf 返回 None（书签指向命名目标等）——
+        # 这不是"页码错"，是"量不到"，跳过而不是当成 0（+1 会变 1，
+        # 于是 1 与目录数字差很多，报一堆假警报）。
+        if dest is None:
+            continue
+        actual = dest + 1
+        toc_checked += 1
+        if abs(hit - actual) > 1:
+            toc_bad.append((title, hit, actual))
+
+    print(f"[5] 目录页码一致性: 核对 {toc_checked} 条")
+    if toc_bad:
+        print(f"    ✗ {len(toc_bad)} 条目录页码与实际不符"
+              f"（编译遍数不够；跑 scripts/build_guide_pdf.py 重建）：")
+        for title, hit, actual in toc_bad[:5]:
+            print(f"        目录写 {hit} 页，实际 {actual} 页：{title}")
+        ok = False
+    else:
+        print("    ✓ 目录印的页码与书签实际指向页一致")
     print()
 
     print("结论:", "✓ 通过" if ok else "✗ 有问题")

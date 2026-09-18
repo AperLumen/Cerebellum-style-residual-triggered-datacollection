@@ -30,6 +30,9 @@
 
 6. Python 一律 `PYTHONPATH=. .venv/bin/python ...`；不用 `X | Y` 运行时
    类型注解（解释器 3.9）。
-7. 基线：pytest 537+ passed（ERROR 6 = dino 合成帧缺失，台账基线非失败）；
-   `make check` 13 步全绿。
+7. 基线：pytest 550+ passed（ERROR 6 = dino 合成帧缺失，台账基线非失败）；
+   `make check` 15 步全绿。**这两个数字由机器核对**——脚本里的判据读本文件
+   的"550+ passed"与"15 步"，与实测对账：步数必须完全相等，通过数不得高于
+   实测、也不得落后实测 2%。改了步数或基线就一并更新这两处，否则
+   `make check` 会直接报错（报错信息里会给出现在该写多少）。
 8. 验收只有一套：`make check`。Makefile 只是薄封装，不许另立标准。

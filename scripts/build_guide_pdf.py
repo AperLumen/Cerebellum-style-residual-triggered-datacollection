@@ -12,7 +12,7 @@
 
 用法：
     PYTHONPATH=. .venv/bin/python scripts/build_guide_pdf.py
-    # 默认 xelatex 编译两遍（第二遍为了让目录页码/书签收敛）
+    # 反复编译 xelatex 直到目录页码收敛（暖态 1 遍，冷启动 3 遍）
 
 退出码（**每条对应一类"编译成功但产物是坏的"的静默失效**）：
     0  成功
@@ -26,6 +26,7 @@
     8  排版自检：PDF 书签里有丢失字符的痕迹（连续空白 = token 被删）
     9  排版自检：PDF 元数据里的下划线被吃掉（``cerebellum_cancel`` →
        ``cerebellumcancel``）
+    10 目录页码不收敛（``guide.toc`` 每遍都在变）
 
 后四条都要求**先编译出 PDF 再回读产物**（书签、元数据、Overfull、Missing
 character 都是 TeX 排版决定的，转换器只能猜）。这是刻意的：本文件遭遇过的
@@ -1923,8 +1924,35 @@ def main() -> int:
     env.setdefault("SOURCE_DATE_EPOCH", "1789257600")   # 2026-09-12 00:00 UTC
     env.setdefault("FORCE_SOURCE_DATE", "1")            # 让 TeX 真正采用该值
 
-    # 两遍：第一遍收集目录/书签，第二遍写入页码
-    for run in (1, 2):
+    # **编译到目录页码收敛，不是固定两遍**（2026-09-18）。
+    #
+    # 原来写的是 `for run in (1, 2)`，理由是"第二遍让目录页码收敛"。这句话
+    # 只在**暖态**（`guide.toc` 已存在且正确）成立；`make clean-guide` 之后
+    # 中间产物被清掉，两遍**不够**——实测冷启动产物目录把 §5 写在 56 页，
+    # 而书签实际指向 58 页（错 2 页），`md5 94fc8226…`；再编译第三遍才是
+    # `613d1da3…`（与入库版逐字节一致）。
+    #
+    # 为什么当时没人发现：**所有自检对这个缺陷恒绿**。0 溢出、0 丢字、
+    # 书签树/GoTo 数/锚点命中全部正常（书签是独立机制，不读 `.toc`）。
+    # 唯一判据是"目录页里的数字 vs 书签实际指向页"，而那条检查当时不存在。
+    #
+    # 收敛判据：LaTeX 编译时**读**上一遍写下的 `.toc` 渲染目录页，同时把
+    # **这一遍**的页码写进新的 `.toc`。所以第 N 遍的目录正确 ⟺
+    # `.toc(N-1) == .toc(N)`。据此循环，而不是拍一个遍数：
+    #   * 暖态：编译前 `.toc` 已正确 → 第 1 遍后不变 → 停（比原来还快）；
+    #   * 冷启动：需要 3 遍（实测）。
+    # 上限 5 遍是为了不收敛时**显式报错**，而不是写出坏产物还静默通过。
+    toc_path = os.path.join(ROOT, "guide.toc")
+
+    def read_toc():
+        if not os.path.exists(toc_path):
+            return None
+        with open(toc_path, encoding="utf-8", errors="replace") as fp:
+            return fp.read()
+
+    MAX_PASSES = 5
+    prev_toc = read_toc()
+    for run in range(1, MAX_PASSES + 1):
         p = subprocess.run(
             [xelatex, "-interaction=nonstopmode", "-halt-on-error",
              os.path.basename(TEX)],
@@ -1934,7 +1962,19 @@ def main() -> int:
             tail = "\n".join(p.stdout.splitlines()[-40:])
             print(tail, file=sys.stderr)
             return 3
-        print(f"xelatex 第 {run} 遍完成")
+        cur_toc = read_toc()
+        if prev_toc is not None and cur_toc == prev_toc:
+            # 本遍渲染用的是 prev_toc，而它已与 cur_toc 相同 → 目录自洽
+            print(f"xelatex 第 {run} 遍完成（目录页码收敛）")
+            break
+        print(f"xelatex 第 {run} 遍完成" if prev_toc is None
+              else f"xelatex 第 {run} 遍完成（目录页码有更新，继续）")
+        prev_toc = cur_toc
+    else:
+        print(f"xelatex 重新编译 {MAX_PASSES} 遍后目录页码仍未收敛"
+              f"（`guide.toc` 每遍都在变）——不写出可能带错页码的 PDF。",
+              file=sys.stderr)
+        return 10
 
     built = os.path.join(ROOT, "guide.pdf")
     if os.path.exists(built):
