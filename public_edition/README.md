@@ -30,6 +30,10 @@ HWC uint8 frames      ->  feature maps  ->  gyro warp + z-residual  ->  adaptive
 - **Acquisition layer** (`cerebellum_cancel/acquisition.py`): pluggable
   `step(frame, gyro, t) → {keep, in_clip, surprise, z_map, clips}` API; swap the
   frozen frontend for any callable with the same signature.
+- **No-IMU fallback** (`cerebellum_cancel/visual_motion.py`): when a recording
+  has no gyro stream, sparse feature tracking + an affine fit estimate the
+  self-motion the corollary discharge would have provided (~1 ms/frame vs
+  0.03 ms for the gyro path — the gyro stream stays the default).
 
 Scope: this layer does **motion deduplication / bandwidth pre-screening**.
 "Kinetically unpredictable ≠ semantically important" — semantic arbitration
@@ -74,11 +78,13 @@ cerebellum_cancel/   the package:
                        featmap_cancel    feature-map cancellation ("shift" | "rotation")
                        rotwarp           full rotation-matrix warp (yaw+pitch+roll)
                        flow_cancel       optical-flow variant (quality upper bound)
+                       visual_motion     no-IMU fallback (sparse-feature self-motion estimate)
                        adapter           cerebellum as an add-on to a frozen backbone
                        acquisition       the pluggable collection layer (public API)
                        pipeline          video + IMU -> clips, end to end
                        eval              trigger evaluation helpers
                        contracts         input contracts / explicit failure modes
+                       integrity         acquisition-link integrity sentinel
 scripts/             make_synthetic.py (scene generator), run_experiment.py
                      (baselines comparison), demo_video.py (visual demo)
 tests/               unit + integration tests, no external data required
@@ -94,10 +100,9 @@ of the claims above depend on them:
 
 | Omitted | What it is | Why it is out of scope |
 | --- | --- | --- |
-| `integrity.py` | acquisition-link integrity sentinel | operates on whole recordings, not per-frame acquisition |
 | `dataset.py` | multimodal dataset container (trainable, publishable) | offline training assets, not collection |
 
-Their contract tests are also omitted from `tests/`. The full versions live in
+Its contract tests are also omitted from `tests/`. The full version lives in
 the parent repository.
 
 ## `rotwarp`: the full-rotation warp

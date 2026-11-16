@@ -30,7 +30,7 @@
 
 6. Python 一律 `PYTHONPATH=. .venv/bin/python ...`；不用 `X | Y` 运行时
    类型注解（解释器 3.9）。
-7. 基线：pytest 550+ passed（ERROR 6 = dino 合成帧缺失，台账基线非失败）；
+7. 基线：pytest 550+ passed（passed + 缺数据 skip；本机无采集素材时实测 538 passed / 12 skipped；ERROR 6 = dino 合成帧缺失，台账基线非失败）；
    `make check` 15 步全绿。**这两个数字由机器核对**——脚本里的判据读本文件
    的"550+ passed"与"15 步"，与实测对账：步数必须完全相等，通过数不得高于
    实测、也不得落后实测 2%。改了步数或基线就一并更新这两处，否则

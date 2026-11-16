@@ -163,7 +163,7 @@ ERROR 被记成**期望基线**（既不会掩盖新失败，也不会悄悄增�
 本仓库的一个自包含子集（包 + 最小脚本 + 测试，不含数据集）打包在
 `public_edition/` 里。它装的是**在线采集层**：取消（`core`、`featmap_cancel`、
 `rotwarp`）、可插拔的 `acquisition` API、`pipeline`，以及输入 `contracts`。
-离线数据集层（`integrity`、`dataset`）**刻意不含**——上面那些结论都不依赖它，
+离线数据集层（`dataset`）**刻意不含**——上面那些结论都不依赖它，
 它的契约测试也一并省略。其中的 `scripts/demo_video.py` 可以把任意序列渲染成
 并排 demo 视频（原始帧 | 残差热力图 | HUD）——同一脚本也有一份在根目录
 `scripts/demo_video.py`：

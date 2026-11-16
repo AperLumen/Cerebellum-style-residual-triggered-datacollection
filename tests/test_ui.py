@@ -110,6 +110,7 @@ def _fresh(n: int):
 
 # ------------------------------------------------- 纪律 2：调参不改变不该改的
 
+@needs_video
 def test_replay_preserves_unrelated_fields():
     """**关键不变量**：score/surprise/t/gyro 与触发参数无关，必须逐位不变。
 
@@ -124,6 +125,7 @@ def test_replay_preserves_unrelated_fields():
         assert np.array_equal(a, b), f"{k} 在 replay 后变了"
 
 
+@needs_video
 def test_replay_marks_itself_and_records_the_config():
     """产物要能自证"这是调过参的"，并记下用的什么参数。"""
     res = run(os.path.join(ui.ROOT, VIDEO), None,
@@ -134,6 +136,7 @@ def test_replay_marks_itself_and_records_the_config():
     assert cfg.get("threshold_k") == 9.0 and cfg.get("off_k") == 3.0
 
 
+@needs_video
 def test_replay_is_equivalent_to_a_fresh_run_with_same_config():
     """等价性：replay(默认cfg) 的 keep 应与直接 run 的 keep 一致。
 
@@ -153,6 +156,7 @@ def test_run_rejects_missing_video_with_readable_message():
     assert "找不到视频文件" in r["error"]
 
 
+@needs_video
 def test_run_rejects_missing_imu_with_readable_message():
     r = ui.act_run({"video": VIDEO, "imu": "/nope/imu.csv"})
     assert r["ok"] is False

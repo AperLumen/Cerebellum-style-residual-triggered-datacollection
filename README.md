@@ -198,7 +198,7 @@ A self-contained subset of this repository (package + minimal scripts +
 tests, no datasets) is packaged in `public_edition/`. It ships the **online
 acquisition layer**: cancellation (`core`, `featmap_cancel`, `rotwarp`),
 the pluggable `acquisition` API, the `pipeline`, and the input `contracts`.
-The offline dataset layer (`integrity`, `dataset`) is deliberately omitted —
+The offline dataset layer (`dataset`) is deliberately omitted —
 none of the claims above depend on it, and its contract tests are omitted
 with it. Its `scripts/demo_video.py` renders a side-by-side demo video (raw
 frame | residual heatmap | HUD) from any sequence — the same script also

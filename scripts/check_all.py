@@ -162,6 +162,24 @@ if src is None:
 
 out = tempfile.mkdtemp(prefix="cmci_smoke_")
 try:
+    if os.path.isdir(src):
+        # data/synthetic/frames 是 PNG 目录，VideoStream 只认视频文件——
+        # 把帧缝成临时 mp4 再喂引擎（这个候选在只有它的机器上才会被走到，
+        # 此前一走到就崩：目录打不开，而第一个候选不存在时它恰是唯一候选）。
+        import cv2
+        frames = sorted(os.path.join(src, f)
+                        for f in os.listdir(src) if f.endswith(".png"))[:120]
+        assert frames, f"{src} 里没有 png 帧"
+        first = cv2.imread(frames[0])
+        h, w = first.shape[:2]
+        src_mp4 = os.path.join(out, "smoke_src.mp4")
+        vw = cv2.VideoWriter(src_mp4, cv2.VideoWriter_fourcc(*"mp4v"),
+                             30.0, (w, h))
+        assert vw.isOpened(), "VideoWriter 打不开（本机 codec 缺失？）"
+        for f in frames:
+            vw.write(cv2.imread(f))
+        vw.release()
+        src = src_mp4
     res = run(src, None, cfg=EngineConfig(max_frames=90))
     assert res.n_frames == 90, res.n_frames
     assert res.score.dtype == np.float64
@@ -607,7 +625,16 @@ def step_tests_baseline(step: Step) -> list[str]:
     # 541 / 15 步，两边脱钩且无任何检查发现——正是本项目守则第 6 条说的
     # "一个总在报有变化的门会被训练成没人看"，反向形态：**一个从不报错的
     # 文档数字，没人会去维护它**。
-    problems.extend(doc_baseline_problems(n_pass))
+    #
+    # 这里的分母用 **passed + skipped** 而不是裸 passed：缺采集素材的机器上
+    # 数据依赖的用例走 skip（needs_video 一族），不是失败。绿灯时
+    # passed + skipped == collected - 已知 ERROR，正好与
+    # tests/test_dev_gates.py::test_real_agents_md_is_consistent_with_reality
+    # 的口径（collect-only 数减已知 ERROR）一致——两个守卫必须算同一个数，
+    # 否则一份文档不可能同时满足两套互相矛盾的判据。
+    m3 = re.search(r"(\d+) skipped", tail)
+    n_would_pass = n_pass + (int(m3.group(1)) if m3 else 0)
+    problems.extend(doc_baseline_problems(n_would_pass))
     return problems
 
 
